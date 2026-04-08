@@ -1,87 +1,101 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import os
+import time
 
 def calculate_rsi(series, period=14):
+    if len(series) < period: return 50
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
 
 def run_engine():
     # 1. Load Master Tickers
-    df_tickers = pd.read_csv("Tickers.csv")
-    symbols = [f"{s.strip()}.NS" for s in df_tickers['SYMBOL']]
-    
-    # 2. Download Nifty 50 for Market Trend
-    print("📈 Fetching Market Context...")
-    nifty = yf.download("^NSEI", period="1y", interval="1d", progress=False)['Close']
-    m_trend = "BULLISH" if nifty.iloc[-1] > nifty.ewm(span=50).mean().iloc[-1] else "BEARISH"
-    
+    try:
+        df_tickers = pd.read_csv("Tickers.csv")
+        symbols = [f"{str(s).strip()}.NS" for s in df_tickers['SYMBOL']]
+    except Exception as e:
+        print(f"Error loading Tickers.csv: {e}")
+        return
+
+    # 2. Market Context
+    print("📈 Checking Nifty...")
+    try:
+        nifty_data = yf.download("^NSEI", period="1y", interval="1d", progress=False)
+        nifty_close = nifty_data['Close']
+        m_trend = "BULLISH" if nifty_close.iloc[-1] > nifty_close.ewm(span=50).mean().iloc[-1] else "BEARISH"
+    except:
+        m_trend = "NEUTRAL"
+
     results = []
-    batch_size = 50  # Processing in small chunks to prevent blocking
+    # Smaller batches to satisfy Yahoo's servers
+    batch_size = 30 
     
-    print(f"🔄 Processing {len(symbols)} symbols in batches of {batch_size}...")
+    print(f"🚀 Processing {len(symbols)} stocks...")
 
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i+batch_size]
         try:
-            # Download batch
-            data = yf.download(batch, period="1y", interval="1d", group_by='ticker', progress=False)
+            # The 'auto_adjust=True' and 'multi_level_index=False' make data much cleaner
+            data = yf.download(batch, period="1y", interval="1d", group_by='ticker', progress=False, threads=True)
             
+            if data is None or data.empty:
+                continue
+
             for sym in batch:
                 try:
-                    s_short = sym.replace(".NS", "")
-                    df = data[sym].dropna()
+                    # Safety check: Does the symbol exist in the downloaded data?
+                    if sym not in data.columns.get_level_values(0) if isinstance(data.columns, pd.MultiIndex) else [sym]:
+                        continue
                     
-                    if len(df) < 60: continue
+                    df = data[sym].dropna() if isinstance(data.columns, pd.MultiIndex) else data.dropna()
+                    if df.empty or len(df) < 30: continue
                     
-                    curr = df['Close'].iloc[-1]
+                    # Technicals
+                    c = df['Close'].iloc[-1]
                     ema20 = df['Close'].ewm(span=20).mean().iloc[-1]
                     ema200 = df['Close'].ewm(span=200).mean().iloc[-1]
-                    rsi = calculate_rsi(df['Close']).iloc[-1]
+                    rsi_val = calculate_rsi(df['Close']).iloc[-1]
                     
-                    # Volume & ATR
-                    vol_curr = df['Volume'].iloc[-1]
-                    vol_avg = df['Volume'].rolling(20).mean().iloc[-1]
-                    tr = pd.concat([df['High']-df['Low'], 
-                                    abs(df['High']-df['Close'].shift()), 
-                                    abs(df['Low']-df['Close'].shift())], axis=1).max(axis=1)
+                    # Vol/ATR
+                    v_curr = df['Volume'].iloc[-1]
+                    v_avg = df['Volume'].rolling(20).mean().iloc[-1]
+                    tr = pd.concat([df['High']-df['Low'], abs(df['High']-df['Close'].shift()), abs(df['Low']-df['Close'].shift())], axis=1).max(axis=1)
                     atr = tr.rolling(14).mean().iloc[-1]
 
-                    # --- Strategy Scoring ---
+                    # Scoring
                     score = 4
-                    if curr > ema20: score += 1
-                    if curr > ema200: score += 1
+                    if c > ema20: score += 1
+                    if c > ema200: score += 1
                     if m_trend == "BULLISH": score += 1
-                    if vol_curr > (vol_avg * 1.5): score += 1
-                    if 45 < rsi < 65: score += 2
-                    
-                    # Penny Stock Guard
-                    if curr < 50: score = min(score, 5)
-                    
-                    # Target Prediction
-                    target = curr + (atr * 2.2)
-                    
-                    results.append({
-                        "SYMBOL": s_short, "PRICE": round(curr, 2), "SCORE": int(score),
-                        "TARGET": round(target, 2), "MOVE_PCT": round(((target-curr)/curr)*100, 1),
-                        "HOLD": "15-30 Days" if rsi > 55 else "30-60 Days", 
-                        "RSI": round(rsi, 1), "VOL": round(vol_curr/vol_avg, 1)
-                    })
-                except: continue
-            print(f"✅ Finished batch {i//batch_size + 1}")
-        except:
-            print(f"❌ Batch {i//batch_size + 1} failed, skipping...")
+                    if v_curr > (v_avg * 1.5): score += 1
+                    if 45 < rsi_val < 65: score += 2
+                    if c < 50: score = min(score, 5) # Penny guard
 
-    # 3. Save Final Analysis
+                    target = c + (atr * 2.2)
+                    results.append({
+                        "SYMBOL": sym.replace(".NS",""), "PRICE": round(c, 2), "SCORE": int(score),
+                        "TARGET": round(target, 2), "MOVE_PCT": round(((target-c)/c)*100, 1),
+                        "HOLD": "15-30 Days" if rsi_val > 55 else "30-60 Days", 
+                        "RSI": round(rsi_val, 1), "VOL": round(v_curr/v_avg, 1) if v_avg > 0 else 1
+                    })
+                except Exception: continue # Skip individual stock errors
+            print(f"✅ Batch {i//batch_size + 1} Done")
+        except Exception as e:
+            print(f"⚠️ Batch Error: {e}")
+            continue
+
+    # 3. Save
     if results:
-        pd.DataFrame(results).to_csv("daily_analysis.csv", index=False)
-        print("✨ engine.py: Analysis Complete.")
+        final_df = pd.DataFrame(results)
+        final_df.to_csv("daily_analysis.csv", index=False)
+        print(f"✨ Successfully analyzed {len(results)} stocks.")
     else:
-        print("⚠️ Error: No data could be processed.")
+        print("❌ No data analyzed. Check Tickers.csv format.")
 
 if __name__ == "__main__":
     run_engine()
+    
