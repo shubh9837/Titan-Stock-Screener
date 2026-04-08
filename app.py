@@ -125,4 +125,3 @@ with tab3:
                     st.info(f"🚀 **ACCELERATION**: {s} has a score of {r['SCORE']}. Strong momentum.")
     else:
         st.info("Your portfolio is empty. Add stocks to see automated signals.")
-        
