@@ -1,0 +1,25 @@
+name: Titan Data Engine Update
+on:
+  schedule:
+    - cron: '30 15 * * *' # 9:00 PM IST daily
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with: { python-version: '3.9' }
+      - name: Install Tools
+        run: pip install yfinance pandas numpy pyarrow
+      - name: Run Market Analysis
+        run: python engine.py
+      - name: Save Data to GitHub
+        run: |
+          git config --global user.name 'Sentinel-Bot'
+          git config --global user.email 'bot@sentinel.com'
+          git add daily_analysis.csv
+          git commit -m "Engine Update $(date)" || exit 0
+          git push origin main --force
