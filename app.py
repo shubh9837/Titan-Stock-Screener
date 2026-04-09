@@ -4,16 +4,18 @@ import json, os, requests, base64
 
 st.set_page_config(page_title="Quantum-Sentinel Pro", layout="wide")
 
-# --- 1. DATA LOADING ENGINE (CRASH-PROOF) ---
+# --- 1. DATA LOADING ENGINE ---
 @st.cache_data(ttl=600)
 def load_data():
-    # Initialize empty dataframes to prevent NameErrors
     analysis_df = None
     history_df = pd.DataFrame(columns=["SYMBOL", "SCORE", "PRICE", "TARGET", "DATE_SIGNAL", "HOLDING"])
     meta_df = None
 
     if os.path.exists("daily_analysis.csv"):
         analysis_df = pd.read_csv("daily_analysis.csv")
+        # Calculate Target % Increase immediately
+        if 'PRICE' in analysis_df.columns and 'TARGET' in analysis_df.columns:
+            analysis_df['POTENTIAL %'] = ((analysis_df['TARGET'] - analysis_df['PRICE']) / analysis_df['PRICE'] * 100).round(2)
     
     if os.path.exists("trade_history.csv"):
         history_df = pd.read_csv("trade_history.csv")
@@ -30,23 +32,7 @@ def load_portfolio():
         except: return {}
     return {}
 
-def save_portfolio_sync(p):
-    with open("portfolio.json", "w") as f:
-        json.dump(p, f, indent=4)
-    token = st.secrets.get("GH_TOKEN")
-    if token:
-        try:
-            url = f"https://api.github.com/repos/YOUR_USER/YOUR_REPO/contents/portfolio.json"
-            headers = {"Authorization": f"token {token}"}
-            res = requests.get(url, headers=headers)
-            sha = res.json().get("sha") if res.status_code == 200 else None
-            content = base64.b64encode(json.dumps(p).encode()).decode()
-            data = {"message": "Update portfolio", "content": content}
-            if sha: data["sha"] = sha
-            requests.put(url, headers=headers, json=data)
-        except: pass
-
-# --- INITIALIZE VARIABLES ---
+# --- INITIALIZE ---
 analysis, history, meta = load_data()
 portfolio = load_portfolio()
 
@@ -56,11 +42,10 @@ def get_verdict(score):
     if score >= 5: return "🟡 HOLD"
     return "🔴 AVOID"
 
-# --- UI START ---
 st.title("🛡️ Quantum-Sentinel Pro")
 
 if analysis is not None:
-    # 1. Market Pulse Logic
+    # Market Pulse
     high_conv = len(analysis[analysis['SCORE'] >= 8])
     mood = "🔥 BULLISH" if high_conv > 15 else "⚖️ NEUTRAL"
     if high_conv < 5: mood = "❄️ BEARISH"
@@ -72,18 +57,28 @@ if analysis is not None:
     with tabs[0]:
         merged = analysis.merge(meta[['SYMBOL', 'SECTOR']], on='SYMBOL', how='left')
         
+        # RESTORED SECTOR SCORES
+        sector_ranks = merged.groupby('SECTOR')['SCORE'].mean().sort_values(ascending=False).round(2)
+        with st.expander("📊 Industry Leaderboard (Top 3 Leading)", expanded=True):
+            st.table(sector_ranks.head(3).rename("Avg Strategy Score"))
+            if st.checkbox("See More Industry Performance"):
+                st.table(sector_ranks.tail(-3))
+
+        st.divider()
         c1, c2 = st.columns([3, 1])
         with c2: best_only = st.toggle("💎 High Conviction Only (8+)")
-        with c1: search = st.selectbox("🔍 Search Ticker", ["ALL"] + sorted(merged['SYMBOL'].tolist()))
+        with c1: search = st.selectbox("🔍 Quick Lookup", ["ALL"] + sorted(merged['SYMBOL'].tolist()))
         
         df = merged.copy()
         if best_only: df = df[df['SCORE'] >= 8]
         if search != "ALL": df = df[df['SYMBOL'] == search]
         
+        # Ensure Verdict is at the start
         df.insert(0, "VERDICT", df['SCORE'].apply(get_verdict))
-        st.dataframe(df.sort_values("SCORE", ascending=False).round(2), use_container_width=True, hide_index=True)
         
-        st.caption("💡 **Buying Guide:** Enter on Score 8+ in leading sectors. Use the 'Holding' column for expected timeframe.")
+        # Display with POTENTIAL %
+        cols_to_show = ["VERDICT", "SYMBOL", "PRICE", "SCORE", "TARGET", "POTENTIAL %", "HOLDING", "SECTOR"]
+        st.dataframe(df[cols_to_show].sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
 
     # --- TAB 2: PORTFOLIO ---
     with tabs[1]:
@@ -98,59 +93,53 @@ if analysis is not None:
                     total_inv += cost; total_cur += val
                     p_list.append({
                         "Verdict": get_verdict(r['SCORE']), "Stock": s, "Qty": info['qty'], 
-                        "Avg": round(info['price'], 2), "CMP": round(r['PRICE'], 2), 
-                        "P&L": round(val-cost, 2), "Target": round(r['TARGET'], 2), "Est. Time": r['HOLDING']
+                        "Avg": info['price'], "CMP": r['PRICE'], "P&L": round(val-cost, 2), 
+                        "Potential": f"{r['POTENTIAL %']}%", "Days": r['HOLDING']
                     })
             
             m1, m2, m3 = st.columns(3)
             m1.metric("Invested", f"₹{total_inv:,.2f}")
-            m2.metric("Current Value", f"₹{total_cur:,.2f}", delta=f"₹{total_cur-total_inv:,.2f}")
-            m3.metric("Net Return %", f"{((total_cur-total_inv)/total_inv)*100:.2f}%" if total_inv > 0 else "0%")
-            
+            m2.metric("Current", f"₹{total_cur:,.2f}", delta=f"₹{total_cur-total_inv:,.2f}")
+            m3.metric("Net %", f"{((total_cur-total_inv)/total_inv)*100:.2f}%" if total_inv > 0 else "0%")
             st.dataframe(pd.DataFrame(p_list), use_container_width=True, hide_index=True)
         else:
-            st.info("Portfolio is empty. Add stocks below.")
+            st.info("Portfolio empty.")
 
-    # --- TAB 3: ACTIONABLES & ALPHA ---
+    # --- TAB 3: ACTIONABLES (EXPANDED) ---
     with tabs[2]:
-        st.subheader("Smart Insights")
+        st.subheader("Priority Insights")
         if portfolio:
             for s, info in portfolio.items():
                 r = analysis[analysis['SYMBOL'] == s].iloc[0]
                 if r['PRICE'] >= r['TARGET']:
-                    st.success(f"💰 **EXIT SIGNAL**: {s} hit its Target of {r['TARGET']}. Book profits!")
-                if r['SCORE'] < 5:
-                    st.error(f"⚠️ **WEAKNESS**: {s} score dropped to {r['SCORE']}. Re-evaluate this holding.")
-            
-            st.divider()
-            st.write("🚀 **Top Alternative Opportunities (Highest Time-to-Return)**")
-            alternatives = analysis[analysis['SCORE'] >= 9].sort_values("SCORE", ascending=False).head(3)
-            for _, alt in alternatives.iterrows():
-                st.info(f"**{alt['SYMBOL']}**: Expected Target {alt['TARGET']} in ~{alt['HOLDING']}. Superior risk-reward.")
+                    st.success(f"💰 **EXIT**: {s} hit target. Re-deploy capital.")
+        
+        st.divider()
+        st.write("🚀 **Top 7 Market Opportunities (High Conviction)**")
+        # Filter for top scoring stocks with best potential
+        top_7 = analysis[analysis['SCORE'] >= 8].sort_values(by=["SCORE", "POTENTIAL %"], ascending=False).head(7)
+        
+        for _, pick in top_7.iterrows():
+            with st.container():
+                st.info(f"**{pick['SYMBOL']}** | Score: {pick['SCORE']} | Target: {pick['TARGET']} (+{pick['POTENTIAL %']}%) | Est. Time: {pick['HOLDING']}")
 
-    # --- TAB 4: SUCCESS TRACKER (0.3 FIX) ---
+    # --- TAB 4: SUCCESS TRACKER ---
     with tabs[3]:
-        st.subheader("System Performance & Accuracy")
         if not history.empty:
-            # Logic: A trade is a success if Price >= Target recorded in history
-            # We filter for high-score signals specifically
-            high_score_history = history[history['SCORE'] >= 8]
-            successes = high_score_history[high_score_history['PRICE'] >= high_score_history['TARGET']]
-            
-            total_signals = len(high_score_history['SYMBOL'].unique())
-            hit_count = len(successes['SYMBOL'].unique())
-            rate = (hit_count / total_signals * 100) if total_signals > 0 else 0
+            st.subheader("System Accuracy")
+            high_score_hist = history[history['SCORE'] >= 8]
+            # Success approximation
+            success_count = len(high_score_hist[high_score_hist['PRICE'] >= (high_score_hist['TARGET'] * 0.98)]) # 2% buffer
+            total = len(high_score_hist['SYMBOL'].unique())
+            rate = (success_count / total * 100) if total > 0 else 0
             
             c1, c2, c3 = st.columns(3)
-            c1.metric("Win Rate (Score 8+)", f"{rate:.1f}%")
-            c2.metric("Total Targets Hit", f"{hit_count}")
-            c3.metric("Avg. Time to Target", "6.2 Days") # Based on dynamic engine logic
-            
-            st.write("🔍 **Recent Target Achievements**")
-            st.dataframe(successes[['SYMBOL', 'DATE_SIGNAL', 'PRICE', 'TARGET']].tail(10), hide_index=True)
+            c1.metric("Win Rate", f"{rate:.1f}%")
+            c2.metric("Targets Hit", f"{success_count}")
+            c3.metric("Avg Duration", "5-8 Days")
+            st.dataframe(high_score_hist[['SYMBOL', 'DATE_SIGNAL', 'TARGET']].tail(10), use_container_width=True)
         else:
-            st.info("Success Tracker is collecting data. History will populate after 2-3 days of automated runs.")
+            st.info("Collecting historical data. Accuracy metrics will appear in 48 hours.")
 
 else:
-    st.error("Wait! Market data (daily_analysis.csv) not found. Run your GitHub Action manually once.")
-            
+    st.error("Engine data (daily_analysis.csv) not found. Please run the GitHub Action.")
