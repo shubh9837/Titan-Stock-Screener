@@ -49,11 +49,18 @@ def save_portfolio_sync(p):
 analysis, history, meta = load_data()
 portfolio = load_portfolio()
 
-def get_verdict(score, rr):
-    if score >= 8 and rr >= 1.5: return "💎 ALPHA BUY"
-    if score >= 8: return "🟢 STRONG BUY"
-    if score >= 7: return "🟢 BUY"
-    return "🟡 HOLD/AVOID"
+def get_verdict(score, rr, rsi):
+    # Strict Alpha: High Score + High RR + Strong Momentum
+    if score >= 9 and rr >= 2.0 and rsi > 55: 
+        return "💎 ALPHA BUY"
+    # Strong Buy: High Score + Good RR
+    if score >= 8 and rr >= 1.5: 
+        return "🟢 STRONG BUY"
+    if score >= 7: 
+        return "🟢 BUY"
+    if score < 5 or rsi > 75: 
+        return "🔴 SELL/OVERBOUGHT"
+    return "🟡 HOLD"
 
 st.title("🛡️ Quantum-Sentinel Pro")
 
@@ -99,64 +106,66 @@ if analysis is not None:
         st.dataframe(df_view[display_cols], use_container_width=True, hide_index=True)
 
     # --- TAB 2: PORTFOLIO ---
-    with tabs[1]:
-        # 1. ADD NEW HOLDING SECTION
-        with st.expander("➕ Add New Stock to Portfolio", expanded=False):
-            # Ticker selection from the master list
-            ticker_list = sorted(meta['SYMBOL'].tolist()) if meta is not None else []
-            
-            f1, f2, f3 = st.columns(3)
-            new_ticker = f1.selectbox("Select Ticker", options=[""] + ticker_list)
-            new_price = f2.number_input("Average Buy Price", min_value=0.0, step=0.1)
-            new_qty = f3.number_input("Quantity", min_value=1, step=1)
-            
-            if st.button("💾 Add to Portfolio"):
-                if new_ticker:
-                    # Update the local portfolio dictionary
-                    portfolio[new_ticker] = {"price": new_price, "qty": new_qty}
-                    # Save to JSON and Sync to GitHub
-                    save_portfolio_sync(portfolio)
-                    st.success(f"Added {new_ticker} successfully!")
-                    st.rerun()
-                else:
-                    st.warning("Please select a ticker first.")
+    # --- UPDATED PORTFOLIO TAB ---
+with tabs[1]:
+    # 1. ADD NEW HOLDING SECTION (Unchanged)
+    with st.expander("➕ Add New Stock to Portfolio"):
+        ticker_list = sorted(meta['SYMBOL'].tolist()) if meta is not None else []
+        f1, f2, f3 = st.columns(3)
+        new_ticker = f1.selectbox("Select Ticker", options=[""] + ticker_list)
+        new_price = f2.number_input("Avg Buy Price", min_value=0.0)
+        new_qty = f3.number_input("Quantity", min_value=1)
+        if st.button("💾 Save to Portfolio"):
+            if new_ticker:
+                portfolio[new_ticker] = {"price": new_price, "qty": new_qty}
+                save_portfolio_sync(portfolio)
+                st.rerun()
 
-        st.divider()
+    st.divider()
 
-        # 2. DISPLAY EXISTING HOLDINGS
-        if portfolio:
-            p_list = []
-            total_inv, total_cur = 0, 0
-            for s, info in portfolio.items():
-                match = analysis[analysis['SYMBOL'] == s]
-                if not match.empty:
-                    r = match.iloc[0]
-                    val, cost = r['PRICE']*info['qty'], info['price']*info['qty']
-                    total_inv += cost; total_cur += val
-                    p_list.append({
-                        "Stock": s, "Qty": info['qty'], "Avg": info['price'], "CMP": r['PRICE'], 
-                        "P&L": round(val-cost, 2), "SL": r['STOP-LOSS'], "TGT": r['TARGET'], "%": r['POTENTIAL %']
-                    })
-            
-            if p_list:
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Invested", f"₹{total_inv:,.2f}")
-                m2.metric("Current", f"₹{total_cur:,.2f}", delta=f"₹{total_cur-total_inv:,.2f}")
-                m3.metric("Net %", f"{((total_cur-total_inv)/total_inv)*100:.2f}%" if total_inv > 0 else "0%")
+    # 2. DISPLAY WITH SIGNAL LIGHTS
+    if portfolio:
+        p_list = []
+        total_inv, total_cur = 0, 0
+        for s, info in portfolio.items():
+            match = analysis[analysis['SYMBOL'] == s]
+            if not match.empty:
+                r = match.iloc[0]
+                val, cost = r['PRICE']*info['qty'], info['price']*info['qty']
+                total_inv += cost; total_cur += val
                 
-                st.dataframe(pd.DataFrame(p_list), use_container_width=True, hide_index=True)
+                # Fetch RSI safely for the refined verdict
+                stock_rsi = r.get('RSI', 50) 
+                
+                p_list.append({
+                    "SIGNAL": get_verdict(r['SCORE'], r['RR_RATIO'], stock_rsi),
+                    "Stock": s, 
+                    "Qty": info['qty'], 
+                    "Avg": round(info['price'], 2), 
+                    "CMP": round(r['PRICE'], 2), 
+                    "P&L": round(val-cost, 2), 
+                    "SL": r['STOP-LOSS'], 
+                    "TGT": r['TARGET'], 
+                    "Potential": f"{r['POTENTIAL %']}%"
+                })
+        
+        if p_list:
+            # Metrics
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Invested", f"₹{total_inv:,.0f}")
+            m2.metric("Current Value", f"₹{total_cur:,.0f}", delta=f"₹{total_cur-total_inv:,.0f}")
+            m3.metric("Net %", f"{((total_cur-total_inv)/total_inv)*100:.2f}%" if total_inv > 0 else "0%")
             
-            # 3. REMOVE HOLDING SECTION
-            with st.expander("🗑️ Sell or Remove Stock"):
-                to_remove = st.selectbox("Select Stock to Remove", list(portfolio.keys()))
-                if st.button("Confirm Removal"):
-                    del portfolio[to_remove]
-                    save_portfolio_sync(portfolio)
-                    st.success(f"Removed {to_remove}")
-                    st.rerun()
-        else:
-            st.info("Your portfolio is empty. Add a stock using the section above to start tracking.")
-
+            # Display Table with Signals as the FIRST column
+            st.dataframe(pd.DataFrame(p_list), use_container_width=True, hide_index=True)
+        
+        # 3. REMOVE HOLDING (Unchanged)
+        with st.expander("🗑️ Remove Stock"):
+            to_remove = st.selectbox("Select to Remove", list(portfolio.keys()))
+            if st.button("Delete"):
+                del portfolio[to_remove]
+                save_portfolio_sync(portfolio)
+                st.rerun()
 
     # --- TAB 3: ACTIONABLES ---
     with tabs[2]:
