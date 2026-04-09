@@ -7,18 +7,20 @@ st.set_page_config(page_title="Quantum-Sentinel Pro", layout="wide")
 # --- LOAD DATA ---
 @st.cache_data(ttl=600)
 def load_data():
-    if not os.path.exists("daily_analysis.csv") or not os.path.exists("trade_history.csv"):
-        return None, None, None
-    return pd.read_csv("daily_analysis.csv"), pd.read_csv("trade_history.csv"), pd.read_csv("tickers_enriched.csv")
-
-analysis, history, meta = load_data()
-
-def load_portfolio():
-    if os.path.exists("portfolio.json"):
-        with open("portfolio.json", "r") as f: return json.load(f)
-    return {}
-
-portfolio = load_portfolio()
+    # 1. Load primary analysis
+    analysis_df = pd.read_csv("daily_analysis.csv") if os.path.exists("daily_analysis.csv") else None
+    
+    # 2. Load history (Return empty dataframe if file is missing)
+    if os.path.exists("trade_history.csv"):
+        history_df = pd.read_csv("trade_history.csv")
+    else:
+        # Create an empty template so the app doesn't crash
+        history_df = pd.DataFrame(columns=["SYMBOL", "SCORE", "PRICE", "TARGET", "DATE_SIGNAL"])
+    
+    # 3. Load metadata
+    meta_df = pd.read_csv("tickers_enriched.csv") if os.path.exists("tickers_enriched.csv") else None
+    
+    return analysis_df, history_df, meta_df
 
 # --- UI LOGIC ---
 st.title("🛡️ Quantum-Sentinel Pro")
