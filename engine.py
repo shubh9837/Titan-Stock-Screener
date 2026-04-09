@@ -52,14 +52,14 @@ def update_daily_analysis(ticker_list):
 
 # --- THE EXECUTIVE BLOCK (This makes it run) ---
 if __name__ == "__main__":
-    if os.path.exists('tickers.csv'):
+    if os.path.exists('Tickers.csv'):
         # Load tickers from your CSV
-        ticker_df = pd.read_csv('tickers.csv')
+        ticker_df = pd.read_csv('Tickers.csv')
         # Ensure the column name is 'SYMBOL'
         list_to_process = ticker_df['SYMBOL'].tolist()
         
         # Trigger the function
         update_daily_analysis(list_to_process)
     else:
-        print("🔴 Critical Error: tickers.csv not found!")
+        print("🔴 Critical Error: Tickers.csv not found!")
         
