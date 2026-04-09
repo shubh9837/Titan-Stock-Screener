@@ -92,18 +92,27 @@ if analysis is not None:
                     val, cost = r['PRICE']*info['qty'], info['price']*info['qty']
                     total_inv += cost; total_cur += val
                     p_list.append({
-                        "Verdict": get_verdict(r['SCORE']), "Stock": s, "Qty": info['qty'], 
-                        "Avg": info['price'], "CMP": r['PRICE'], "P&L": round(val-cost, 2), 
-                        "Potential": f"{r['POTENTIAL %']}%", "Days": r['HOLDING']
+                        "Verdict": get_verdict(r['SCORE']), 
+                        "Stock": s, 
+                        "Qty": info['qty'], 
+                        "Avg": round(info['price'], 2), 
+                        "CMP": round(r['PRICE'], 2), 
+                        "P&L": round(val-cost, 2), 
+                        "Target Price": round(r['TARGET'], 2), # Added back for quick reference
+                        "Potential": f"{r['POTENTIAL %']}%", 
+                        "Est. Days": r['HOLDING']
                     })
             
+            # Metric Header
             m1, m2, m3 = st.columns(3)
             m1.metric("Invested", f"₹{total_inv:,.2f}")
-            m2.metric("Current", f"₹{total_cur:,.2f}", delta=f"₹{total_cur-total_inv:,.2f}")
-            m3.metric("Net %", f"{((total_cur-total_inv)/total_inv)*100:.2f}%" if total_inv > 0 else "0%")
-            st.dataframe(pd.DataFrame(p_list), use_container_width=True, hide_index=True)
+            m2.metric("Current Value", f"₹{total_cur:,.2f}", delta=f"₹{total_cur-total_inv:,.2f}")
+            m3.metric("Net Return %", f"{((total_cur-total_inv)/total_inv)*100:.2f}%" if total_inv > 0 else "0%")
+            
+            # Display Table
+            st.dataframe(pd.DataFrame(p_list).sort_values("P&L", ascending=False), use_container_width=True, hide_index=True)
         else:
-            st.info("Portfolio empty.")
+            st.info("Portfolio is empty. Add your ICICI/Axis holdings to track performance.")
 
     # --- TAB 3: ACTIONABLES (EXPANDED) ---
     with tabs[2]:
