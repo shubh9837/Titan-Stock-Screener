@@ -7,70 +7,54 @@ st.set_page_config(page_title="Quantum-Sentinel Pro", layout="wide")
 
 st.markdown("""
     <style>
-    h1 { font-size: 1.6rem !important; }
-    h2 { font-size: 1.2rem !important; }
-    h3 { font-size: 1.0rem !important; }
-    [data-testid="stMetricValue"] { font-size: 1.2rem !important; }
+    h1 { font-size: 1.6rem !important; color: #E0E0E0; }
+    h2 { font-size: 1.2rem !important; color: #BDBDBD; }
     .stMetric { background-color: #1e2130; border-radius: 8px; padding: 10px !important; border: 1px solid #3e4452; }
     .stDataFrame td, .stDataFrame th { font-size: 0.85rem !important; }
+    .buy-pointer { background-color: #1a2e1a; padding: 10px; border-radius: 5px; margin-bottom: 5px; border-left: 5px solid #4CAF50; }
     </style>
     """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=600)
 def load_all_data():
-    if not os.path.exists("daily_analysis.csv"): return None, None, pd.DataFrame()
+    if not os.path.exists("daily_analysis.csv"): return None, pd.DataFrame()
     df = pd.read_csv("daily_analysis.csv")
     df['SECTOR'] = df['SECTOR'].fillna("General").astype(str)
-    
-    nifty = df[df['SYMBOL'] == "^NSEI"].iloc[0] if "^NSEI" in df['SYMBOL'].values else None
-    df = df[df['SYMBOL'] != "^NSEI"]
-    
     df['STOP-LOSS'] = (df['PRICE'] * 0.95).round(2)
     df['EXP_PCT'] = (((df['TARGET'] - df['PRICE']) / df['PRICE']) * 100).round(2)
     df['VERDICT'] = df.apply(lambda r: "🔴 EXIT" if r['RSI'] > 78 else ("💎 ALPHA" if r['SCORE'] >= 8 else "🟢 BUY" if r['SCORE'] >= 6 else "🟡 HOLD"), axis=1)
     
     hist = pd.read_csv("trade_history.csv") if os.path.exists("trade_history.csv") else pd.DataFrame()
-    return df, nifty, hist
+    return df, hist
 
-def load_portfolio_file():
+def load_portfolio():
     if os.path.exists("portfolio.json"):
-        try:
-            with open("portfolio.json", "r") as f:
-                return json.load(f)
-        except: return {}
+        with open("portfolio.json", "r") as f: return json.load(f)
     return {}
 
-df, nifty, history = load_all_data()
-portfolio_data = load_portfolio_file()
+df, history = load_all_data()
+portfolio = load_portfolio()
 
 if df is not None:
-    tabs = st.tabs(["🚀 Screener", "💼 Portfolio", "⚡ Actionables", "📊 Success"])
+    tabs = st.tabs(["🚀 Screener", "💼 Portfolio", "⚡ Actionables", "📊 Success Rate"])
 
     # --- TAB 1: SCREENER ---
     with tabs[0]:
-        if nifty is not None:
-            st.caption(f"🏁 Benchmark Nifty 50: {nifty['PRICE']:.2f} | RSI: {nifty['RSI']:.2f}")
-
+        # Industry Dropdown (Sorted)
         ind_stats = df.groupby('SECTOR')['SCORE'].mean().sort_values(ascending=False).round(2)
-        
-        # Display Top 3 Industries as Metrics
-        num_inds = len(ind_stats)
-        if num_inds > 0:
-            m_cols = st.columns(min(3, num_inds))
-            icons = ["🥇", "🥈", "🥉"]
-            for i in range(min(3, num_inds)):
-                m_cols[i].metric(f"{icons[i]} {ind_stats.index[i]}", f"{ind_stats.values[i]:.2f}")
-        
-        # Remaining Industries in a clean expander
-        if num_inds > 3:
-            with st.expander("See More Industry Scores"):
-                st.dataframe(ind_stats[3:], use_container_width=True)
+        with st.expander("📊 View Industry Strength (Ranked)"):
+            st.dataframe(ind_stats, use_container_width=True)
+
+        # Top Picks Button
+        if st.button("🔥 Suggest Top Picks Immediately"):
+            top_picks = df[df['VERDICT'] == "💎 ALPHA"].sort_values("SCORE", ascending=False).head(5)
+            st.table(top_picks[["SYMBOL", "PRICE", "EXP_PCT", "SCORE"]])
 
         st.divider()
         c1, c2, c3 = st.columns([2, 1, 1])
         f_ind = c1.multiselect("Filter Industry", options=sorted(df['SECTOR'].unique()))
         f_score = c2.slider("Min Score", 0, 10, 5)
-        f_search = c3.text_input("🔍 Ticker Search")
+        f_search = c3.text_input("🔍 Search Stock")
         
         v_df = df.copy()
         if f_ind: v_df = v_df[v_df['SECTOR'].isin(f_ind)]
@@ -81,70 +65,81 @@ if df is not None:
 
     # --- TAB 2: PORTFOLIO ---
     with tabs[1]:
-        if portfolio_data:
+        st.subheader("Add Stock")
+        with st.expander("➕ New Entry"):
+            a1, a2, a3 = st.columns(3)
+            new_sym = a1.selectbox("Symbol", df['SYMBOL'].unique())
+            new_prc = a2.number_input("Avg Price", step=0.01)
+            new_qty = a3.number_input("Quantity", step=1)
+            if st.button("Add to Portfolio"):
+                portfolio[new_sym] = {"price": new_prc, "qty": new_qty}
+                with open("portfolio.json", "w") as f: json.dump(portfolio, f)
+                st.rerun()
+
+        if portfolio:
             p_rows = []
-            inv_total, cur_total = 0.0, 0.0
-            for s, info in portfolio_data.items():
-                match = df[df['SYMBOL'] == s]
-                if not match.empty:
-                    m = match.iloc[0]
-                    cost = info['price'] * info['qty']
-                    current = m['PRICE'] * info['qty']
-                    inv_total += cost
-                    cur_total += current
+            for s, info in portfolio.items():
+                m = df[df['SYMBOL'] == s].iloc[0] if s in df['SYMBOL'].values else None
+                if m is not None:
                     p_rows.append({
-                        "SYMBOL": s, "QTY": info['qty'], "AVG": f"{info['price']:.2f}", 
-                        "CMP": f"{m['PRICE']:.2f}", "P&L %": f"{((m['PRICE']-info['price'])/info['price']*100):.2f}%", 
-                        "VERDICT": m['VERDICT'], "EXP %": f"{m['EXP_PCT']:.2f}%"
+                        "SYMBOL": s, "CMP": f"{m['PRICE']:.2f}", "AVG": f"{info['price']:.2f}", 
+                        "QTY": info['qty'], "TARGET": f"{m['TARGET']:.2f}", "EXP %": f"{m['EXP_PCT']:.2f}%",
+                        "RSI": f"{m['RSI']:.2f}", "VERDICT": m['VERDICT'], "STOP LOSS": f"{m['STOP-LOSS']:.2f}"
                     })
+            st.dataframe(pd.DataFrame(p_rows), use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.subheader("Exit Stock")
+            e1, e2 = st.columns(2)
+            exit_sym = e1.selectbox("Select to Exit", list(portfolio.keys()))
+            exit_qty = e2.number_input("Qty to Exit", min_value=1, max_value=portfolio[exit_sym]['qty'] if exit_sym in portfolio else 1)
             
-            # Summary Header
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Invested", f"₹{inv_total:,.2f}")
-            k2.metric("Current", f"₹{cur_total:,.2f}", delta=f"₹{cur_total-inv_total:,.2f}")
-            k3.metric("Net Return", f"{((cur_total-inv_total)/inv_total*100 if inv_total > 0 else 0):.2f}%")
-            
-            st.table(pd.DataFrame(p_rows))
-        else:
-            st.info("Portfolio is empty. Add data to portfolio.json.")
+            if st.button("Confirm Partial/Full Exit"):
+                m_data = df[df['SYMBOL'] == exit_sym].iloc[0]
+                # Log to History
+                new_h = pd.DataFrame([{
+                    "SYMBOL": exit_sym, "BUY_PRICE": portfolio[exit_sym]['price'], 
+                    "SELL_PRICE": m_data['PRICE'], "QTY": exit_qty,
+                    "P&L_%": round(((m_data['PRICE'] - portfolio[exit_sym]['price']) / portfolio[exit_sym]['price']) * 100, 2),
+                    "DATE": str(datetime.date.today())
+                }])
+                new_h.to_csv("trade_history.csv", mode='a', header=not os.path.exists("trade_history.csv"), index=False)
+                
+                # Update JSON
+                if exit_qty >= portfolio[exit_sym]['qty']: del portfolio[exit_sym]
+                else: portfolio[exit_sym]['qty'] -= exit_qty
+                
+                with open("portfolio.json", "w") as f: json.dump(portfolio, f)
+                st.success(f"Exited {exit_qty} shares of {exit_sym}")
+                st.rerun()
 
     # --- TAB 3: ACTIONABLES ---
     with tabs[2]:
-        st.subheader("🎯 Swing Action Center")
-        col_buys, col_alerts = st.columns(2)
-        
-        with col_buys:
-            st.markdown("### 💎 Top Alpha Picks")
-            alphas = df[df['VERDICT'] == "💎 ALPHA"].sort_values("EXP_PCT", ascending=False).head(5)
-            if not alphas.empty:
-                st.dataframe(alphas[["SYMBOL", "PRICE", "EXP_PCT", "VOL_SURGE"]], hide_index=True)
-            else:
-                st.write("No Alpha picks currently.")
+        st.subheader("⚡ Portfolio Actions")
+        for s, info in portfolio.items():
+            m = df[df['SYMBOL'] == s].iloc[0] if s in df['SYMBOL'].values else None
+            if m is not None:
+                if "EXIT" in m['VERDICT']:
+                    st.error(f"🚨 **BOOK PROFITS on {s}**: RSI is {m['RSI']:.2f} (Overbought). Target was {m['TARGET']:.2f}")
+                elif m['PRICE'] <= m['STOP-LOSS']:
+                    st.warning(f"⚠️ **STOP LOSS on {s}**: Price {m['PRICE']:.2f} below SL {m['STOP-LOSS']:.2f}")
 
-        with col_alerts:
-            st.markdown("### 🚨 Portfolio Alerts")
-            alert_count = 0
-            for s in portfolio_data:
-                m = df[df['SYMBOL'] == s].iloc[0] if s in df['SYMBOL'].values else None
-                if m is not None:
-                    if "EXIT" in m['VERDICT']:
-                        st.error(f"EXIT {s}: Overbought RSI ({m['RSI']:.2f})")
-                        alert_count += 1
-                    if m['PRICE'] <= m['STOP-LOSS']:
-                        st.warning(f"SL HIT {s}: Under {m['STOP-LOSS']:.2f}")
-                        alert_count += 1
-            if alert_count == 0: st.write("All holdings are within safety zones.")
+        st.divider()
+        st.subheader("🎯 Top Buy Recommendations")
+        recoms = df[df['VERDICT'] == "💎 ALPHA"].sort_values("EXP_PCT", ascending=False).head(5)
+        for _, row in recoms.iterrows():
+            st.markdown(f"""
+                <div class="buy-pointer">
+                    <b>{row['SYMBOL']}</b> | CMP: ₹{row['PRICE']:.2f} | <b>Target: ₹{row['TARGET']:.2f}</b> | 
+                    Expected: {row['EXP_PCT']:.2f}% | Verdict: {row['VERDICT']}
+                </div>
+            """, unsafe_allow_html=True)
 
     # --- TAB 4: SUCCESS RATE ---
     with tabs[3]:
-        st.subheader("📈 Trade Performance History")
         if not history.empty:
-            win_rate = (len(history[history['P&L_%'] > 0]) / len(history) * 100) if len(history) > 0 else 0
-            st.metric("Strategy Win Rate", f"{win_rate:.2f}%")
-            st.dataframe(history, use_container_width=True, hide_index=True)
+            st.metric("Total Profit/Loss %", f"{history['P&L_%'].mean():.2f}%")
+            st.dataframe(history.tail(20), use_container_width=True)
         else:
-            st.info("History will populate once trades are exited in the Portfolio tab.")
-
-else:
-    st.error("Engine failed to generate data.")
-            
+            st.info("Exit trades in the Portfolio tab to track success.")
+        
