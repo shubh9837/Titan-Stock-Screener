@@ -106,7 +106,6 @@ if analysis is not None:
         st.dataframe(df_view[display_cols], use_container_width=True, hide_index=True)
 
     # --- TAB 2: PORTFOLIO ---
-    # --- UPDATED PORTFOLIO TAB ---
 with tabs[1]:
     # 1. ADD NEW HOLDING SECTION (Unchanged)
     with st.expander("➕ Add New Stock to Portfolio"):
