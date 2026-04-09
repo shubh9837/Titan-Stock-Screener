@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta  # Ensure you have pip install pandas-ta
+import pandas_ta_classic as ta
 
 def update_daily_analysis(ticker_list):
     results = []
