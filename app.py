@@ -15,20 +15,26 @@ def load_data():
         try:
             analysis_df = pd.read_csv("daily_analysis.csv")
             if not analysis_df.empty:
-                # Numeric Force & Logic Prep
+                # Ensure essential columns exist to prevent KeyError
+                cols_to_fix = ['PRICE', 'TARGET', 'SCORE', 'RSI', 'PE_RATIO', 'MARKET_CAP']
+                for col in cols_to_fix:
+                    if col not in analysis_df.columns:
+                        analysis_df[col] = 0
+                
+                # Numeric Force
                 analysis_df['PRICE'] = pd.to_numeric(analysis_df['PRICE'], errors='coerce').fillna(0)
                 analysis_df['TARGET'] = pd.to_numeric(analysis_df['TARGET'], errors='coerce').fillna(0)
                 analysis_df['SCORE'] = pd.to_numeric(analysis_df['SCORE'], errors='coerce').fillna(0)
                 
-                # Dynamic Stop Loss (5%)
+                # Logic Prep
                 analysis_df['STOP-LOSS'] = (analysis_df['PRICE'] * 0.95).round(2)
-                # Potential % Calculation
                 analysis_df['POTENTIAL %'] = (((analysis_df['TARGET'] - analysis_df['PRICE']) / analysis_df['PRICE'].replace(0, 1)) * 100).round(2)
-                # Risk-Reward Calculation
+                
                 risk = (analysis_df['PRICE'] - analysis_df['STOP-LOSS']).replace(0, 0.01)
                 reward = (analysis_df['TARGET'] - analysis_df['PRICE'])
                 analysis_df['RR_RATIO'] = (reward / risk).round(2)
-        except Exception as e: st.error(f"Loader Error: {e}")
+        except Exception as e: 
+            st.error(f"Loader Error (Analysis): {e}")
 
     if os.path.exists("trade_history.csv"):
         try: history_df = pd.read_csv("trade_history.csv")
@@ -37,7 +43,14 @@ def load_data():
     if os.path.exists("tickers_enriched.csv"):
         try: meta_df = pd.read_csv("tickers_enriched.csv")
         except: pass
-    
+    else:
+        # Fallback: Create meta_df from analysis_df if enriched file missing
+        if analysis_df is not None:
+            meta_df = analysis_df[['SYMBOL']].copy()
+            meta_df['SECTOR'] = 'General'
+            meta_df['PE_RATIO'] = 25
+            meta_df['MARKET_CAP'] = 0
+
     return analysis_df, history_df, meta_df
 
 def load_portfolio():
@@ -55,29 +68,18 @@ def save_portfolio_sync(p):
 
 # --- THE HYBRID DECISION ENGINE ---
 def get_hybrid_verdict(row):
+    # Using .get() with defaults to prevent crashing on missing data
     score = row.get('SCORE', 0)
     rr = row.get('RR_RATIO', 0)
     rsi = row.get('RSI', 50)
-    pe = row.get('PE_RATIO', 25) # Default to average P/E
-    m_cap = row.get('MARKET_CAP', 1000) # In Crores
-
-    # 1. THE SELL SIGNALS (Priority)
+    pe = row.get('PE_RATIO', 25)
+    
     if rsi > 78: return "🔴 SELL (OVERBOUGHT)"
     if score < 5: return "🔴 AVOID (WEAK TREND)"
     if pe > 85: return "🔴 AVOID (OVERVALUED)"
-
-    # 2. THE ALPHA BUY (Technical + Fundamental + Quality)
-    if score >= 9 and rr >= 2.0 and rsi > 55 and pe < 50:
-        return "💎 ALPHA BUY"
-    
-    # 3. STRONG BUY (High Technical + Reasonable Val)
-    if score >= 8 and rr >= 1.5 and pe < 65:
-        return "🟢 STRONG BUY"
-
-    # 4. STANDARD BUY
-    if score >= 7 and rr >= 1.2:
-        return "🟢 BUY"
-
+    if score >= 9 and rr >= 2.0 and rsi > 55 and pe < 50: return "💎 ALPHA BUY"
+    if score >= 8 and rr >= 1.5 and pe < 65: return "🟢 STRONG BUY"
+    if score >= 7 and rr >= 1.2: return "🟢 BUY"
     return "🟡 HOLD"
 
 # --- INITIALIZE ---
@@ -87,19 +89,22 @@ portfolio = load_portfolio()
 st.title("🛡️ Quantum-Sentinel Pro")
 
 if analysis is not None:
+    # PRE-PROCESS VERDICTS to ensure column exists before tabs load
+    analysis['VERDICT'] = analysis.apply(get_hybrid_verdict, axis=1)
+    
     tabs = st.tabs(["🚀 Screener", "💼 Portfolio", "⚡ Actionables", "📊 Success Tracker"])
 
     # --- TAB 1: SCREENER ---
     with tabs[0]:
-        # Merge Fundamentals into the Technical view
-        merged = analysis.merge(meta[['SYMBOL', 'SECTOR', 'PE_RATIO', 'MARKET_CAP']], on='SYMBOL', how='left')
+        # Merge safely
+        merged = analysis.merge(meta[['SYMBOL', 'SECTOR']], on='SYMBOL', how='left')
         merged['SECTOR'] = merged['SECTOR'].fillna("General")
-        merged['PE_RATIO'] = merged['PE_RATIO'].fillna(25)
 
         # Leaderboard
-        sector_ranks = merged.groupby('SECTOR')['SCORE'].mean().sort_values(ascending=False).round(2)
-        with st.expander("📊 Industry Leaderboard", expanded=True):
-            st.table(sector_ranks.head(3))
+        if not merged.empty:
+            sector_ranks = merged.groupby('SECTOR')['SCORE'].mean().sort_values(ascending=False).round(2)
+            with st.expander("📊 Industry Leaderboard", expanded=True):
+                st.table(sector_ranks.head(3))
 
         st.divider()
         c1, c2 = st.columns([3, 1])
@@ -107,20 +112,18 @@ if analysis is not None:
         with c1: search = st.selectbox("🔍 Search Ticker", ["ALL"] + sorted(merged['SYMBOL'].unique().tolist()))
         
         df_view = merged.copy()
-        # APPLY HYBRID VERDICT
-        df_view['VERDICT'] = df_view.apply(get_hybrid_verdict, axis=1)
-        
         if alpha_only: df_view = df_view[df_view['VERDICT'] == "💎 ALPHA BUY"]
         if search != "ALL": df_view = df_view[df_view['SYMBOL'] == search]
         
         df_view = df_view.sort_values(by="SCORE", ascending=False)
-        cols = ["VERDICT", "SYMBOL", "PRICE", "STOP-LOSS", "TARGET", "RR_RATIO", "POTENTIAL %", "SECTOR"]
-        st.dataframe(df_view[cols], use_container_width=True, hide_index=True)
+        # Use only columns we are sure exist
+        available_cols = [c for c in ["VERDICT", "SYMBOL", "PRICE", "STOP-LOSS", "TARGET", "RR_RATIO", "POTENTIAL %", "SECTOR"] if c in df_view.columns]
+        st.dataframe(df_view[available_cols], use_container_width=True, hide_index=True)
 
     # --- TAB 2: PORTFOLIO ---
     with tabs[1]:
         with st.expander("➕ Add New Holding"):
-            available = sorted(merged['SYMBOL'].unique().tolist()) if not merged.empty else []
+            available = sorted(analysis['SYMBOL'].unique().tolist())
             f1, f2, f3 = st.columns(3)
             new_t = f1.selectbox("Ticker", options=[""] + available)
             new_p = f2.number_input("Avg Price", min_value=0.0)
@@ -135,7 +138,7 @@ if analysis is not None:
             p_rows = []
             inv, cur = 0.0, 0.0
             for sym, info in portfolio.items():
-                row = merged[merged['SYMBOL'] == sym]
+                row = analysis[analysis['SYMBOL'] == sym]
                 if not row.empty:
                     r = row.iloc[0]
                     inv += (info['price'] * info['qty'])
@@ -155,36 +158,47 @@ if analysis is not None:
                 m3.metric("Net %", f"{((cur-inv)/inv*100):.2f}%" if inv > 0 else "0%")
                 st.dataframe(pd.DataFrame(p_rows), use_container_width=True, hide_index=True)
             
-            with st.expander("🗑️ Sell/Remove"):
-                to_del = st.selectbox("Select", list(portfolio.keys()))
-                if st.button("Delete"):
-                    del portfolio[to_del]
-                    save_portfolio_sync(portfolio)
-                    st.rerun()
+            if list(portfolio.keys()):
+                with st.expander("🗑️ Sell/Remove"):
+                    to_del = st.selectbox("Select to Remove", list(portfolio.keys()))
+                    if st.button("Delete"):
+                        del portfolio[to_del]
+                        save_portfolio_sync(portfolio)
+                        st.rerun()
 
     # --- TAB 3: ACTIONABLES ---
     with tabs[2]:
         st.subheader("Action Alerts")
+        alerts_found = False
         if portfolio:
             for s, info in portfolio.items():
-                r_match = merged[merged['SYMBOL'] == s]
+                r_match = analysis[analysis['SYMBOL'] == s]
                 if not r_match.empty:
                     r = r_match.iloc[0]
-                    if r['PRICE'] <= r['STOP-LOSS']: st.error(f"🚨 **SL HIT**: {s}")
-                    elif r['PRICE'] >= r['TARGET']: st.success(f"💰 **TGT HIT**: {s}")
+                    if r['PRICE'] <= r['STOP-LOSS']: 
+                        st.error(f"🚨 **SL HIT**: {s} (Exit at {r['PRICE']})")
+                        alerts_found = True
+                    elif r['PRICE'] >= r['TARGET']: 
+                        st.success(f"💰 **TGT HIT**: {s} (Target {r['TARGET']} Reached!)")
+                        alerts_found = True
+        if not alerts_found:
+            st.write("No immediate Stop-Loss or Target alerts for your portfolio.")
         
-        st.write("🚀 **Top 7 Alpha Opportunities**")
-        top = merged[merged['VERDICT'] == "💎 ALPHA BUY"].head(7)
-        if top.empty: top = merged.sort_values("RR_RATIO", ascending=False).head(7)
+        st.divider()
+        st.write("🚀 **Top Alpha Opportunities**")
+        top = analysis[analysis['VERDICT'] == "💎 ALPHA BUY"].head(7)
+        if top.empty: top = analysis.sort_values("RR_RATIO", ascending=False).head(7)
         for _, p in top.iterrows():
             st.info(f"**{p['SYMBOL']}** | {p['VERDICT']} | Target: {p['TARGET']} (+{p['POTENTIAL %']}%)")
 
     # --- TAB 4: SUCCESS TRACKER ---
     with tabs[3]:
+        st.subheader("Performance Tracker")
         if not history.empty:
-            st.subheader("Performance Tracker")
             st.dataframe(history.tail(10), use_container_width=True)
+        else:
+            st.info("No trade history found yet. History builds as you close trades.")
 
 else:
-    st.error("Missing Data Files.")
+    st.error("🔴 Missing Data: `daily_analysis.csv` not found. Please run the Engine first.")
     
