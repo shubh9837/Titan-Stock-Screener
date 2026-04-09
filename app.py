@@ -4,7 +4,7 @@ import json, os, requests, base64
 
 st.set_page_config(page_title="Quantum-Sentinel Pro", layout="wide")
 
-# --- 1. DATA LOADING ENGINE ---
+# --- 1. DATA LOADING ENGINE (CRASH-PROOF) ---
 @st.cache_data(ttl=600)
 def load_data():
     analysis_df = None
@@ -13,15 +13,17 @@ def load_data():
 
     if os.path.exists("daily_analysis.csv"):
         analysis_df = pd.read_csv("daily_analysis.csv")
-        # Logic Fix: Dynamic Stop Loss & RR Ratio
-        if 'PRICE' in analysis_df.columns:
-            # We use a 1.5x ATR equivalent or 5% default for Stop Loss
-            analysis_df['STOP-LOSS'] = (analysis_df['PRICE'] * 0.95).round(2)
-            analysis_df['POTENTIAL %'] = ((analysis_df['TARGET'] - analysis_df['PRICE']) / analysis_df['PRICE'] * 100).round(2)
+        if not analysis_df.empty:
+            # 1. Ensure columns exist and fill missing values
+            analysis_df['SCORE'] = analysis_df['SCORE'].fillna(0)
             
-            # Risk vs Reward Ratio
-            risk = analysis_df['PRICE'] - analysis_df['STOP-LOSS']
-            reward = analysis_df['TARGET'] - analysis_df['PRICE']
+            # 2. Calculate Derived Columns
+            analysis_df['STOP-LOSS'] = (analysis_df['PRICE'] * 0.95).round(2)
+            analysis_df['POTENTIAL %'] = (((analysis_df['TARGET'] - analysis_df['PRICE']) / analysis_df['PRICE']) * 100).round(2)
+            
+            # 3. Risk-Reward Ratio
+            risk = (analysis_df['PRICE'] - analysis_df['STOP-LOSS']).replace(0, 0.01)
+            reward = (analysis_df['TARGET'] - analysis_df['PRICE'])
             analysis_df['RR_RATIO'] = (reward / risk).round(2)
     
     if os.path.exists("trade_history.csv"):
@@ -42,7 +44,6 @@ def load_portfolio():
 def save_portfolio_sync(p):
     with open("portfolio.json", "w") as f:
         json.dump(p, f, indent=4)
-    # Note: Ensure GH_TOKEN is in st.secrets for cloud syncing
 
 # --- INITIALIZE ---
 analysis, history, meta = load_data()
@@ -61,26 +62,41 @@ if analysis is not None:
 
     # --- TAB 1: SCREENER ---
     with tabs[0]:
-        merged = analysis.merge(meta[['SYMBOL', 'SECTOR']], on='SYMBOL', how='left')
-        
+        # Merge metadata
+        if meta is not None:
+            merged = analysis.merge(meta[['SYMBOL', 'SECTOR']], on='SYMBOL', how='left')
+        else:
+            merged = analysis.copy()
+            merged['SECTOR'] = "Unknown"
+
         # Sector Rankings
         sector_ranks = merged.groupby('SECTOR')['SCORE'].mean().sort_values(ascending=False).round(2)
         with st.expander("📊 Industry Leaderboard", expanded=True):
             st.table(sector_ranks.head(3))
+            if st.checkbox("See More"):
+                st.table(sector_ranks.tail(-3))
 
         st.divider()
         c1, c2 = st.columns([3, 1])
         with c2: best_only = st.toggle("💎 RR > 1.5 & Score 8+")
         with c1: search = st.selectbox("🔍 Search", ["ALL"] + sorted(merged['SYMBOL'].tolist()))
         
-        df = merged.copy()
-        if best_only: df = df[(df['SCORE'] >= 8) & (df['RR_RATIO'] >= 1.5)]
-        if search != "ALL": df = df[df['SYMBOL'] == search]
+        # Step-by-step filtering to avoid KeyError
+        df_view = merged.copy()
+        if best_only: 
+            df_view = df_view[(df_view['SCORE'] >= 8) & (df_view['RR_RATIO'] >= 1.5)]
+        if search != "ALL": 
+            df_view = df_view[df_view['SYMBOL'] == search]
         
-        df.insert(0, "VERDICT", df.apply(lambda x: get_verdict(x['SCORE'], x['RR_RATIO']), axis=1))
+        # Add Verdict Column
+        df_view['VERDICT'] = df_view.apply(lambda x: get_verdict(x['SCORE'], x['RR_RATIO']), axis=1)
         
-        cols = ["VERDICT", "SYMBOL", "PRICE", "STOP-LOSS", "TARGET", "RR_RATIO", "POTENTIAL %", "HOLDING"]
-        st.dataframe(df[cols].sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
+        # FINAL SORTING (Done before column selection)
+        df_view = df_view.sort_values(by="SCORE", ascending=False)
+        
+        # Select and Display
+        display_cols = ["VERDICT", "SYMBOL", "PRICE", "STOP-LOSS", "TARGET", "RR_RATIO", "POTENTIAL %", "HOLDING", "SECTOR"]
+        st.dataframe(df_view[display_cols], use_container_width=True, hide_index=True)
 
     # --- TAB 2: PORTFOLIO ---
     with tabs[1]:
@@ -98,17 +114,17 @@ if analysis is not None:
                         "P&L": round(val-cost, 2), "SL": r['STOP-LOSS'], "TGT": r['TARGET'], "%": r['POTENTIAL %']
                     })
             
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Invested", f"₹{total_inv:,.0f}")
-            m2.metric("Current Value", f"₹{total_cur:,.0f}", delta=f"₹{total_cur-total_inv:,.0f}")
-            m3.metric("Net %", f"{((total_cur-total_inv)/total_inv)*100:.2f}%" if total_inv > 0 else "0%")
+            if p_list:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Invested", f"₹{total_inv:,.0f}")
+                m2.metric("Current", f"₹{total_cur:,.0f}", delta=f"₹{total_cur-total_inv:,.0f}")
+                m3.metric("Net %", f"{((total_cur-total_inv)/total_inv)*100:.2f}%" if total_inv > 0 else "0%")
+                
+                st.dataframe(pd.DataFrame(p_list), use_container_width=True, hide_index=True)
             
-            st.dataframe(pd.DataFrame(p_list), use_container_width=True, hide_index=True)
-            
-            # --- NEW: SELL/REMOVE LOGIC ---
-            with st.expander("🗑️ Sell or Remove Stock"):
-                to_remove = st.selectbox("Select Stock to Remove", list(portfolio.keys()))
-                if st.button("Confirm Removal"):
+            with st.expander("🗑️ Remove Stock"):
+                to_remove = st.selectbox("Select Stock", list(portfolio.keys()))
+                if st.button("Delete"):
                     del portfolio[to_remove]
                     save_portfolio_sync(portfolio)
                     st.rerun()
@@ -122,27 +138,26 @@ if analysis is not None:
             for s, info in portfolio.items():
                 r = analysis[analysis['SYMBOL'] == s].iloc[0]
                 if r['PRICE'] <= r['STOP-LOSS']:
-                    st.error(f"🚨 **STOP LOSS HIT**: {s} is below {r['STOP-LOSS']}. Exit to protect capital!")
+                    st.error(f"🚨 **STOP LOSS**: {s} hit {r['STOP-LOSS']}. Protective exit suggested.")
                 elif r['PRICE'] >= r['TARGET']:
-                    st.success(f"💰 **TARGET ACHIEVED**: {s} hit {r['TARGET']}. Book profits.")
+                    st.success(f"💰 **TARGET**: {s} hit {r['TARGET']}. Profit booking suggested.")
 
         st.divider()
-        st.write("🚀 **Top 7 Alpha Opportunities (High RR Ratio)**")
-        # Filter for top 7 stocks with Score 8+ and RR > 1.8
+        st.write("🚀 **Top 7 Alpha Opportunities**")
         top_7 = analysis[analysis['SCORE'] >= 8].sort_values("RR_RATIO", ascending=False).head(7)
         for _, pick in top_7.iterrows():
-            st.info(f"**{pick['SYMBOL']}** | RR Ratio: {pick['RR_RATIO']} | Tgt: {pick['TARGET']} (+{pick['POTENTIAL %']}%)")
+            st.info(f"**{pick['SYMBOL']}** | RR: {pick['RR_RATIO']} | Tgt: {pick['TARGET']} (+{pick['POTENTIAL %']}%)")
 
     # --- TAB 4: SUCCESS TRACKER ---
     with tabs[3]:
+        st.subheader("Historical Win Rate")
         if not history.empty:
-            st.subheader("Win Rate Analysis")
-            # Successful if price ever crossed target in history
             wins = len(history[history['PRICE'] >= history['TARGET']])
             total = len(history)
             st.metric("System Accuracy", f"{(wins/total*100):.1f}%" if total > 0 else "0%")
-            st.write("Success stories are logged once a trade hits its mathematical target.")
-
+            st.dataframe(history[['SYMBOL', 'DATE_SIGNAL', 'TARGET']].tail(10), use_container_width=True)
+        else:
+            st.info("Accuracy data will populate after 48 hours of automated runs.")
 else:
-    st.error("Missing daily_analysis.csv. Run GitHub Action.")
+    st.error("No analysis data found. Run your GitHub Action manually once.")
     
