@@ -30,7 +30,6 @@ def sync_to_github(file_path, content, message):
         repo_name = st.secrets["REPO_NAME"]
         g = Github(token)
         repo = g.get_repo(repo_name)
-        
         try:
             contents = repo.get_contents(file_path)
             repo.update_file(contents.path, message, content, contents.sha)
@@ -41,12 +40,9 @@ def sync_to_github(file_path, content, message):
         st.error(f"GitHub Sync Error: {e}")
         return False
 
-# --- DYNAMIC CALCULATION ENGINE ---
 def calculate_trade_metrics(row):
-    # Dynamic Expected % based on Score and RSI
     base_target = 10 + (row['SCORE'] * 1.5)
     if row['RSI'] < 40: base_target += 5 
-    # Dynamic Holding Period (Days)
     hold_days = int(25 - (row['SCORE'] * 2))
     return round(base_target, 2), max(5, hold_days)
 
@@ -66,7 +62,6 @@ def load_all_data():
 
 df, history = load_all_data()
 
-# Portfolio Persistence
 if os.path.exists("portfolio.json"):
     with open("portfolio.json", "r") as f:
         try: portfolio = json.load(f)
@@ -88,10 +83,8 @@ if df is not None:
         ind_options = ["All Sectors"] + [f"{sector} ({score:.1f})" for sector, score in ind_stats.items()]
         selected_option = st.selectbox("📂 Sector Strength (Sorted)", ind_options)
         selected_ind = selected_option.split(" (")[0] if selected_option != "All Sectors" else "All"
-
         filtered_df = df.copy()
         if selected_ind != "All": filtered_df = filtered_df[filtered_df['SECTOR'] == selected_ind]
-            
         top_picks = filtered_df[filtered_df['SCORE'] >= 7.5].sort_values("SCORE", ascending=False).head(8)
         if not top_picks.empty:
             pick_html = '<div class="top-pick-bar">'
@@ -104,20 +97,35 @@ if df is not None:
     with tabs[1]:
         if portfolio:
             p_rows = []
+            total_inv, total_val = 0.0, 0.0
             for sym, data in portfolio.items():
                 m = df[df['SYMBOL'] == sym].iloc[0] if sym in df['SYMBOL'].values else None
                 if m is not None:
                     inv, cur = data['price'] * data['qty'], m['PRICE'] * data['qty']
+                    total_inv += inv; total_val += cur
                     p_rows.append({"SYMBOL": sym, "VERDICT": m['VERDICT'], "SCORE": m['SCORE'], "QTY": data['qty'], "AVG": data['price'], "CMP": m['PRICE'], "INVESTED": inv, "VALUE": cur, "P&L %": round(((cur-inv)/inv*100), 2), "TARGET": m['TARGET'], "EXP %": m['EXP_PCT'], "STOP-LOSS": m['STOP-LOSS'], "DAYS": m['HOLD_DAYS']})
             pdf = pd.DataFrame(p_rows)
-            st.markdown(f"### 📋 Portfolio Overview ({len(pdf)} Holdings)")
-            st.dataframe(pdf, use_container_width=True, hide_index=True)
-            st.markdown("### ⚠️ Holding Actions")
-            holding_actions = pdf[(pdf['P&L %'] < -4) | (pdf['SCORE'] < 5) | (pdf['VERDICT'] == "🔴 EXIT")]
-            if not holding_actions.empty:
-                st.warning("Immediate Review Required:")
-                st.table(holding_actions[["SYMBOL", "P&L %", "VERDICT", "STOP-LOSS"]])
-            else: st.success("✅ Holdings Stable.")
+            
+            # --- PORTFOLIO SUMMARY METRICS ---
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("💰 Invested", f"₹{total_inv:,.2f}")
+            p_n_l = total_val - total_inv
+            m2.metric("🏦 Portfolio Value", f"₹{total_val:,.2f}", delta=f"₹{p_n_l:,.2f}")
+            ret_pct = (p_n_l / total_inv * 100) if total_inv > 0 else 0
+            m3.metric("📊 Overall Return", f"{ret_pct:.2f}%")
+            m4.metric("📂 Holdings", len(pdf))
+
+            st.markdown("### 📋 Detailed Holdings")
+            st.dataframe(pdf.style.applymap(lambda x: 'color: #238636' if isinstance(x, float) and x > 0 else ('color: #da3633' if isinstance(x, float) and x < 0 else ''), subset=['P&L %']), use_container_width=True, hide_index=True)
+            
+            # --- HOLDING ACTIONS (In Portfolio Tab) ---
+            st.markdown("### ⚠️ Management Actions")
+            h_actions = pdf[(pdf['P&L %'] < -4) | (pdf['SCORE'] < 5.5) | (pdf['VERDICT'] == "🔴 EXIT")]
+            if not h_actions.empty:
+                for _, row in h_actions.iterrows():
+                    st.error(f"🚨 **{row['SYMBOL']}**: {row['VERDICT']} | P&L: {row['P&L %']}% | Score: {row['SCORE']} (Review Sell/SL)")
+            else:
+                st.success("✅ All holdings are maintaining positive momentum.")
         
         mcol1, mcol2 = st.columns(2)
         with mcol1:
@@ -127,55 +135,47 @@ if df is not None:
                 aqty = st.number_input("Quantity", min_value=1)
                 if st.button("Save & Sync Trade"):
                     portfolio[asym] = {"price": aprc, "qty": aqty, "date": str(datetime.date.today())}
-                    save_portfolio_and_sync(portfolio)
-                    st.rerun()
+                    save_portfolio_and_sync(portfolio); st.rerun()
         with mcol2:
             if portfolio:
                 with st.expander("📤 Close Position"):
                     esym = st.selectbox("Symbol to Exit", list(portfolio.keys()))
                     if st.button("Confirm Sell & Sync"):
                         m_data = df[df['SYMBOL'] == esym].iloc[0]
-                        # Fix for the Syntax Error Parentheses
-                        p_n_l = round(((m_data['PRICE'] - portfolio[esym]['price']) / portfolio[esym]['price']) * 100, 2)
-                        
-                        hist_row = pd.DataFrame([{
-                            "SYMBOL": esym, 
-                            "BUY_DATE": portfolio[esym].get('date', 'N/A'), 
-                            "EXIT_DATE": str(datetime.date.today()), 
-                            "BUY_PRICE": portfolio[esym]['price'], 
-                            "SELL_PRICE": m_data['PRICE'], 
-                            "P&L_%": p_n_l
-                        }])
-                        
+                        pnl_val = round(((m_data['PRICE'] - portfolio[esym]['price']) / portfolio[esym]['price']) * 100, 2)
+                        hist_row = pd.DataFrame([{"SYMBOL": esym, "BUY_DATE": portfolio[esym].get('date', 'N/A'), "EXIT_DATE": str(datetime.date.today()), "BUY_PRICE": portfolio[esym]['price'], "SELL_PRICE": m_data['PRICE'], "P&L_%": pnl_val}])
                         full_hist = pd.concat([history, hist_row], ignore_index=True)
                         full_hist.to_csv("trade_history.csv", index=False)
                         sync_to_github("trade_history.csv", full_hist.to_csv(index=False), f"Exit Trade: {esym}")
-                        
-                        del portfolio[esym]
-                        save_portfolio_and_sync(portfolio)
-                        st.rerun()
+                        del portfolio[esym]; save_portfolio_and_sync(portfolio); st.rerun()
 
     # --- TAB 3: ACTIONABLES ---
     with tabs[2]:
-        st.markdown("### ⚡ Portfolio Insights")
+        st.markdown("### 🛡️ Portfolio Monitoring (Active Holdings)")
         if portfolio:
-            for sym in portfolio.keys():
+            risk_found = False
+            for sym, data in portfolio.items():
                 m = df[df['SYMBOL'] == sym].iloc[0]
-                if m['SCORE'] < 6: st.markdown(f'<div class="action-card" style="border-left-color: #da3633;">🔴 <b>{sym}</b>: Weak Score ({m["SCORE"]}). Check Verdict.</div>', unsafe_allow_html=True)
-        
-        st.markdown("### 💎 New Alpha Opportunities")
+                # High Priority: RSI Exit or Stop Loss
+                if m['RSI'] > 78 or m['PRICE'] < m['STOP-LOSS'] or m['SCORE'] < 5:
+                    risk_found = True
+                    reason = "Overbought RSI" if m['RSI'] > 78 else "Stop-Loss Breach" if m['PRICE'] < m['STOP-LOSS'] else "Technical Weakness"
+                    st.markdown(f'<div class="action-card" style="border-left-color: #da3633;">⚠️ <b>{sym}</b>: Urgent {reason}<br>CMP: ₹{m["PRICE"]} | RSI: {m["RSI"]} | Score: {m["SCORE"]}</div>', unsafe_allow_html=True)
+            if not risk_found: st.info("No urgent sell actions required for your current holdings.")
+        else: st.caption("Add stocks to your portfolio to see active monitoring.")
+
+        st.markdown("---")
+        st.markdown("### 💎 New Alpha Entry Opportunities")
         new_opps = df[df['SCORE'] >= 8.5].sort_values("SCORE", ascending=False).head(5)
         for _, r in new_opps.iterrows():
-            st.markdown(f'<div class="action-card" style="border-left-color: #238636;"><b>{r["SYMBOL"]}</b> | CMP: ₹{r["PRICE"]} | <b>Target: ₹{r["TARGET"]} (+{r["EXP_PCT"]}%)</b><br><small>Technical Score: {r["SCORE"]} | RSI: {r["RSI"]} | Est. Hold: {r["HOLD_DAYS"]} days.</small></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="action-card" style="border-left-color: #238636;">✅ <b>{r["SYMBOL"]}</b>: Potential {r["EXP_PCT"]}% gain in ~{r["HOLD_DAYS"]} days.<br><small>Score: {r["SCORE"]} | Target: ₹{r["TARGET"]} | SL: ₹{r["STOP-LOSS"]}</small></div>', unsafe_allow_html=True)
 
     # --- TAB 4: SUCCESS ---
     with tabs[3]:
         if not history.empty:
-            st.markdown("### 🏆 Performance Track Record")
+            st.markdown("### 🏆 Cumulative Performance")
             c1, c2 = st.columns(2)
             c1.metric("Win Rate", f"{(len(history[history['P&L_%'] > 0])/len(history)*100):.1f}%")
-            c2.metric("Total Trades", len(history))
+            c2.metric("Closed Trades", len(history))
             st.dataframe(history.sort_values("EXIT_DATE", ascending=False), use_container_width=True, hide_index=True)
-else:
-    st.error("Engine data (daily_analysis.csv) not found.")
-    
+            
