@@ -32,4 +32,3 @@ jobs:
           git add daily_analysis.csv
           git commit -m "Automated Market Update: $(date)" || echo "No changes to commit"
           git push
-          
