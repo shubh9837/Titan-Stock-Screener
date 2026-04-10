@@ -1,47 +1,26 @@
 import streamlit as st
 import pandas as pd
 import json, os, datetime
-import plotly.express as px
 
 # --- CONFIG & STYLING ---
 st.set_page_config(page_title="Quantum-Sentinel Pro", layout="wide", page_icon="📈")
 
-# TITAN UI CUSTOM CSS
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    
     .main { background-color: #0d1117; }
     
-    div[data-testid="stMetric"] {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 12px;
-        padding: 15px !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
+    /* Metrics & Cards */
+    div[data-testid="stMetric"] { background-color: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 12px !important; }
+    .titan-card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 20px; margin-bottom: 15px; }
     
-    .titan-card {
-        background: rgba(22, 27, 34, 0.8);
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 15px;
-        border: 1px solid #30363d;
-    }
+    /* Status Pointers */
+    .buy-pointer { border-left: 5px solid #238636; background: rgba(35, 134, 54, 0.05); padding: 15px; border-radius: 8px; margin-bottom: 10px; }
+    .sell-pointer { border-left: 5px solid #da3633; background: rgba(218, 54, 51, 0.05); padding: 15px; border-radius: 8px; margin-bottom: 10px; }
     
-    .buy-pointer { 
-        border-left: 6px solid #238636;
-        background: linear-gradient(90deg, rgba(35, 134, 54, 0.1) 0%, rgba(22, 27, 34, 1) 100%);
-    }
-    
-    .sell-pointer { 
-        border-left: 6px solid #da3633;
-        background: linear-gradient(90deg, rgba(218, 54, 51, 0.1) 0%, rgba(22, 27, 34, 1) 100%);
-    }
-
-    h1, h2, h3 { color: #f0f6fc !important; font-weight: 700; }
-    .stCaption { color: #8b949e !important; }
+    /* Alpha Picks Grid */
+    .alpha-box { background: #1c2128; border: 1px solid #238636; border-radius: 8px; padding: 10px; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -51,138 +30,131 @@ def load_all_data():
     df = pd.read_csv("daily_analysis.csv")
     df['STOP-LOSS'] = (df['PRICE'] * 0.95).round(2)
     df['EXP_PCT'] = (((df['TARGET'] - df['PRICE']) / df['PRICE']) * 100).round(2)
-    df['VERDICT'] = df.apply(lambda r: "🔴 EXIT" if r['RSI'] > 78 else ("💎 ALPHA" if r['SCORE'] >= 8 else "🟢 BUY" if r['SCORE'] >= 6 else "🟡 HOLD"), axis=1)
+    df['VERDICT'] = df.apply(lambda r: "💎 ALPHA" if r['SCORE'] >= 8 else "🟢 BUY" if r['SCORE'] >= 6 else "🟡 HOLD", axis=1)
+    df.loc[df['RSI'] > 78, 'VERDICT'] = "🔴 EXIT"
     hist = pd.read_csv("trade_history.csv") if os.path.exists("trade_history.csv") else pd.DataFrame()
     return df, hist
 
 df, history = load_all_data()
+
+# Load Portfolio
 portfolio = {}
 if os.path.exists("portfolio.json"):
-    with open("portfolio.json", "r") as f: portfolio = json.load(f)
+    with open("portfolio.json", "r") as f:
+        try: portfolio = json.load(f)
+        except: portfolio = {}
+
+def save_portfolio(p):
+    with open("portfolio.json", "w") as f:
+        json.dump(p, f)
 
 if df is not None:
-    # Added Icons to Tab Headers
     tabs = st.tabs(["🔍 SCREENER", "💼 PORTFOLIO", "⚡ ACTIONABLES", "🏆 SUCCESS"])
 
     # --- TAB 1: SCREENER ---
     with tabs[0]:
-        st.markdown("### 🏗️ Industry Momentum")
         ind_stats = df.groupby('SECTOR')['SCORE'].mean().sort_values(ascending=False).reset_index()
-        selected_ind = st.selectbox("📂 Select Industry to view score details:", ind_stats['SECTOR'])
-        score_val = ind_stats[ind_stats['SECTOR'] == selected_ind]['SCORE'].values[0]
-        st.info(f"📊 The average Technical Score for **{selected_ind}** is **{score_val:.2f}**")
-
-        if st.button("🔭 SCAN FOR TOP ALPHA PICKS"):
-            top = df[df['SCORE'] >= 9].sort_values("EXP_PCT", ascending=False).head(5)
-            if not top.empty:
-                cols = st.columns(len(top))
-                for i, (_, row) in enumerate(top.iterrows()):
-                    with cols[i]:
-                        st.markdown(f"**{row['SYMBOL']}**")
-                        st.code(f"₹{row['PRICE']:.2f}")
-                        st.caption(f"⭐ Score: {row['SCORE']}")
-            else:
-                st.info("🌑 No 9+ Score stocks found. Waiting for setup...")
-
-        st.divider()
-        st.dataframe(df[["SYMBOL", "VERDICT", "SCORE", "PRICE", "TARGET", "EXP_PCT", "SECTOR", "RSI"]].sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
-
-    # --- TAB 2: PORTFOLIO ---
-    p_df = pd.DataFrame()
-    with tabs[1]:
-        col_left, col_right = st.columns([3, 1])
+        selected_ind = st.selectbox("📂 Filter by Industry:", ["All"] + list(ind_stats['SECTOR']))
         
-        with col_right:
-            with st.expander("📥 ADD STOCK"):
-                s_name = st.selectbox("Ticker", sorted(df['SYMBOL'].unique()))
-                s_avg = st.number_input("💵 Avg Price", step=0.01)
-                s_qty = st.number_input("🔢 Qty", min_value=1)
-                if st.button("✅ Save Entry"):
-                    portfolio[s_name] = {"price": s_avg, "qty": s_qty}
-                    with open("portfolio.json", "w") as f: json.dump(portfolio, f)
-                    st.rerun()
-            
-            if portfolio:
-                with st.expander("📤 EXIT POSITION"):
-                    ex_s = st.selectbox("Exit Ticker", list(portfolio.keys()))
-                    ex_q = st.number_input("Sell Qty", min_value=1, max_value=portfolio[ex_s]['qty'] if ex_s in portfolio else 1)
-                    if st.button("⛔ Confirm Exit"):
-                        st.success(f"Logging exit for {ex_s}...")
+        st.markdown("### 🔥 High-Conviction Alpha Picks")
+        top_picks = df[df['SCORE'] >= 9].sort_values("EXP_PCT", ascending=False).head(4)
+        if not top_picks.empty:
+            cols = st.columns(4)
+            for i, (_, row) in enumerate(top_picks.iterrows()):
+                with cols[i]:
+                    st.markdown(f'<div class="alpha-box"><span style="color:#8b949e; font-size:0.8rem;">{row["SYMBOL"]}</span><br><b style="color:#4CAF50;">₹{row["PRICE"]:.2f}</b><br><small style="color:#58a6ff;">Score: {row["SCORE"]}</small></div>', unsafe_allow_html=True)
+        
+        st.divider()
+        search = st.text_input("🔍 Search Ticker", placeholder="Enter symbol...")
+        v_df = df.copy()
+        if selected_ind != "All": v_df = v_df[v_df['SECTOR'] == selected_ind]
+        if search: v_df = v_df[v_df['SYMBOL'].str.contains(search.upper())]
+        st.dataframe(v_df.sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
 
-        with col_left:
+    # --- TAB 2: PORTFOLIO (FULL FUNCTIONALITY) ---
+    with tabs[1]:
+        p_col_data, p_col_mgt = st.columns([2.5, 1])
+        
+        with p_col_data:
+            st.markdown("### 📋 Current Holdings")
             if portfolio:
-                p_rows = []
-                t_inv, t_cur = 0.0, 0.0
-                for s, info in portfolio.items():
-                    m = df[df['SYMBOL'] == s].iloc[0] if s in df['SYMBOL'].values else None
-                    if m is not None:
-                        t_inv += (info['price'] * info['qty'])
-                        t_cur += (m['PRICE'] * info['qty'])
-                        p_rows.append({"SYMBOL": s, "QTY": info['qty'], "AVG": info['price'], "CMP": m['PRICE'], "TARGET": m['TARGET'], "EXP %": m['EXP_PCT'], "RSI": m['RSI'], "VERDICT": m['VERDICT'], "STOP LOSS": m['STOP-LOSS']})
-                p_df = pd.DataFrame(p_rows)
+                p_list = []
+                total_inv, total_val = 0.0, 0.0
+                for sym, data in portfolio.items():
+                    m_row = df[df['SYMBOL'] == sym]
+                    if not m_row.empty:
+                        m = m_row.iloc[0]
+                        cur_val = m['PRICE'] * data['qty']
+                        inv_val = data['price'] * data['qty']
+                        total_inv += inv_val
+                        total_val += cur_val
+                        p_list.append({
+                            "TICKER": sym, "QTY": data['qty'], "AVG": f"₹{data['price']:.2f}", 
+                            "CMP": f"₹{m['PRICE']:.2f}", "P&L": f"{((m['PRICE']-data['price'])/data['price']*100):.2f}%",
+                            "VERDICT": m['VERDICT'], "STOP LOSS": m['STOP-LOSS'], "RSI": m['RSI']
+                        })
                 
+                # Summary Header
                 m1, m2, m3 = st.columns(3)
-                m1.metric("💰 Invested", f"₹{t_inv:,.2f}")
-                m2.metric("🏦 Current Value", f"₹{t_cur:,.2f}", delta=f"₹{t_cur-t_inv:,.2f}")
-                m3.metric("📈 Net Change", f"{((t_cur-t_inv)/t_inv*100):.2f}%" if t_inv > 0 else "0%")
+                m1.metric("💰 Invested", f"₹{total_inv:,.2f}")
+                m2.metric("🏦 Value", f"₹{total_val:,.2f}", delta=f"₹{total_val-total_inv:,.2f}")
+                p_pct = ((total_val-total_inv)/total_inv*100) if total_inv > 0 else 0
+                m3.metric("📈 Net Return", f"{p_pct:.2f}%")
                 
-                st.dataframe(p_df.style.format(precision=2), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(p_list), use_container_width=True, hide_index=True)
             else:
-                st.info("📭 Your portfolio is currently empty.")
+                st.info("Your portfolio is currently empty. Add stocks using the panel on the right. ➡️")
+
+        with p_col_mgt:
+            st.markdown("### ⚙️ Management")
+            with st.expander("📥 Add Stock", expanded=not portfolio):
+                add_sym = st.selectbox("Ticker", sorted(df['SYMBOL'].unique()), key="add_s")
+                add_prc = st.number_input("Purchase Price", step=0.1, key="add_p")
+                add_qty = st.number_input("Quantity", min_value=1, step=1, key="add_q")
+                if st.button("➕ Confirm Addition"):
+                    portfolio[add_sym] = {"price": add_prc, "qty": add_qty}
+                    save_portfolio(portfolio)
+                    st.success(f"Added {add_sym}")
+                    st.rerun()
+
+            if portfolio:
+                with st.expander("📤 Exit Position"):
+                    ex_sym = st.selectbox("Ticker to Sell", list(portfolio.keys()), key="ex_s")
+                    ex_qty = st.number_input("Sell Qty", min_value=1, max_value=portfolio[ex_sym]['qty'], step=1)
+                    if st.button("⛔ Confirm Exit"):
+                        m_data = df[df['SYMBOL'] == ex_sym].iloc[0]
+                        # Log to History
+                        new_h = pd.DataFrame([{
+                            "SYMBOL": ex_sym, "BUY": portfolio[ex_sym]['price'], "SELL": m_data['PRICE'],
+                            "QTY": ex_qty, "P&L_%": round(((m_data['PRICE'] - portfolio[ex_sym]['price']) / portfolio[ex_sym]['price']) * 100, 2),
+                            "DATE": str(datetime.date.today())
+                        }])
+                        new_h.to_csv("trade_history.csv", mode='a', header=not os.path.exists("trade_history.csv"), index=False)
+                        
+                        # Update Portfolio
+                        if ex_qty >= portfolio[ex_sym]['qty']: del portfolio[ex_sym]
+                        else: portfolio[ex_sym]['qty'] -= ex_qty
+                        save_portfolio(portfolio)
+                        st.rerun()
 
     # --- TAB 3: ACTIONABLES ---
     with tabs[2]:
-        col_act1, col_act2 = st.columns([1, 1.5])
+        st.markdown("### ⚡ Critical Actions")
+        if portfolio:
+            for s, d in portfolio.items():
+                m = df[df['SYMBOL'] == s].iloc[0]
+                if "EXIT" in m['VERDICT'] or m['PRICE'] < m['STOP-LOSS']:
+                    st.markdown(f'<div class="sell-pointer">🚨 <b>{s}</b>: Action Required. RSI: {m["RSI"]} | SL: ₹{m["STOP-LOSS"]}</div>', unsafe_allow_html=True)
         
-        with col_act1:
-            st.markdown("### 🛡️ Portfolio Risk")
-            if not p_df.empty:
-                for _, row in p_df.iterrows():
-                    if "EXIT" in row['VERDICT'] or row['CMP'] < row['STOP LOSS']:
-                        st.markdown(f"""
-                        <div class="titan-card sell-pointer">
-                            <b>🚨 {row['SYMBOL']}</b><br>
-                            <span style="color:#da3633;">Action: Book Profits/Cut Loss</span><br>
-                            📉 RSI: {row['RSI']:.2f} | 🛑 SL: ₹{row['STOP LOSS']:.2f}
-                        </div>
-                        """, unsafe_allow_html=True)
-            else:
-                st.caption("✨ No urgent alerts for your holdings.")
+        st.markdown("#### 💎 High Conviction Buy Suggestions")
+        for _, r in top_picks.iterrows():
+            st.markdown(f'<div class="buy-pointer">✅ <b>{r["SYMBOL"]}</b>: Score {r["SCORE"]} | Target: ₹{r["TARGET"]}</div>', unsafe_allow_html=True)
 
-        with col_act2:
-            st.markdown("### 🎯 Alpha Opportunities")
-            risk_amt = st.number_input("🏦 Risk Capital per Trade (₹)", value=2000, step=500)
-            
-            alphas = df[df['VERDICT'] == "💎 ALPHA"].sort_values("SCORE", ascending=False).head(5)
-            for _, r in alphas.iterrows():
-                risk_per_share = r['PRICE'] - r['STOP-LOSS']
-                qty = int(risk_amt / risk_per_share) if risk_per_share > 0 else 0
-                
-                st.markdown(f"""
-                <div class="titan-card buy-pointer">
-                    <div style="display:flex; justify-content:space-between;">
-                        <span style="font-size:1.2rem; font-weight:700;">💎 {r['SYMBOL']}</span>
-                        <span style="color:#238636; font-weight:700;">⭐ {r['SCORE']:.2f}</span>
-                    </div>
-                    <div style="margin-top:10px; font-size:0.9rem;">
-                        💵 CMP: <b>₹{r['PRICE']:.2f}</b> | 🎯 Target: <b>₹{r['TARGET']:.2f}</b> ({r['EXP_PCT']:.2f}%)<br>
-                        ⚖️ D/E: {r['DEBT_EQUITY']:.2f} | 🌡️ RSI: {r['RSI']:.2f}<br>
-                        <hr style="border:0.5px solid #30363d;">
-                        📦 <b>SUGGESTED QTY: {qty} SHARES</b><br>
-                        <span style="font-size:0.8rem; color:#8b949e;">(Risking ₹{risk_amt} total if SL hits at ₹{r['STOP-LOSS']})</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-    # --- TAB 4: SUCCESS RATE ---
+    # --- TAB 4: SUCCESS ---
     with tabs[3]:
-        st.markdown("### 📈 Performance Metrics")
         if not history.empty:
-            st.metric("🎯 Strategy Accuracy", f"{(len(history[history['P&L_%'] > 0])/len(history)*100):.2f}%")
+            st.metric("🎯 Accuracy", f"{(len(history[history['P&L_%'] > 0])/len(history)*100):.2f}%")
             st.dataframe(history.sort_values("DATE", ascending=False), use_container_width=True, hide_index=True)
-        else:
-            st.info("⏳ Trade history will appear here once you log exits.")
-
 else:
-    st.error("⚠️ Engine data not found. Please run engine.py first.")
+    st.error("Engine data not found.")
     
