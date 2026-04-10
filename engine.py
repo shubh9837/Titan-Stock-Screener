@@ -8,42 +8,52 @@ import time, datetime
 
 def run_engine():
     try:
+        # Load your master ticker list
         master = pd.read_csv("Tickers.csv")
         symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].unique()]
         
-        results = [] # Renamed from all_results to match the append logic below
+        results = [] 
         chunk_size = 100 
         
         for i in range(0, len(symbols), chunk_size):
             batch = symbols[i:i+chunk_size]
+            # Fetching 5 days of data to ensure enough points for 15m indicators
             data = yf.download(batch, period="5d", interval="15m", progress=False)
             
             if data.empty: continue
             
             for t in batch:
                 try:
+                    # Isolate specific ticker data from the batch download
                     s_price_data = data.iloc[:, data.columns.get_level_values(1) == t]
                     s_price_data.columns = s_price_data.columns.get_level_values(0)
                     s_price_data = s_price_data.dropna()
                     
+                    # Ensure minimum data points for EMA-50 and RSI-14
                     if len(s_price_data) < 15: continue 
                     
-                    # --- MATH SECTION (Formula preserved exactly) ---
-                    # RSI Calculation
+                    # --- MATH SECTION (Using 'ta' library) ---
+                    # RSI 14
                     rsi_io = RSIIndicator(close=s_price_data['Close'], window=14)
-                    rsi = rsi_io.rsi().iloc[-1]
+                    rsi_series = rsi_io.rsi()
+                    if rsi_series.empty or pd.isna(rsi_series.iloc[-1]): continue
+                    rsi = rsi_series.iloc[-1]
 
-                    # EMA 50 Calculation
+                    # EMA 50
                     ema_io = EMAIndicator(close=s_price_data['Close'], window=50)
-                    ema50 = ema_io.ema_indicator().iloc[-1]
+                    ema50_series = ema_io.ema_indicator()
+                    if ema50_series.empty or pd.isna(ema50_series.iloc[-1]): continue
+                    ema50 = ema50_series.iloc[-1]
 
-                    # ATR Calculation
+                    # ATR 14
                     atr_io = AverageTrueRange(high=s_price_data['High'], low=s_price_data['Low'], close=s_price_data['Close'], window=14)
-                    atr = atr_io.average_true_range().iloc[-1]
+                    atr_series = atr_io.average_true_range()
+                    if atr_series.empty or pd.isna(atr_series.iloc[-1]): continue
+                    atr = atr_series.iloc[-1]
                     
                     curr_p = s_price_data['Close'].iloc[-1]
                     
-                    # --- SCORING LOGIC (Preserved exactly) ---
+                    # --- SCORING LOGIC (Alpha Formula) ---
                     score = 0
                     if curr_p > ema50: score += 5
                     if 40 < rsi < 65: score += 3
@@ -57,14 +67,21 @@ def run_engine():
                         "STOP_LOSS": round(curr_p - (2 * atr), 2),
                         "TARGET": round(curr_p + (3 * atr), 2)
                     })
-                except: continue
-            print(f"Processed chunk {i//chunk_size + 1}")
-            time.sleep(0.5)
+                except Exception:
+                    continue
+            
+            print(f"✅ Processed chunk {i//chunk_size + 1}")
+            time.sleep(0.7) # Slightly increased delay to be extra safe with Yahoo Finance
 
-        pd.DataFrame(results).to_csv("daily_analysis.csv", index=False)
-        print("✅ Sync Success")
+        # Save to CSV for the Streamlit app to consume
+        if results:
+            pd.DataFrame(results).to_csv("daily_analysis.csv", index=False)
+            print(f"🚀 Successfully analyzed {len(results)} stocks.")
+        else:
+            print("⚠️ No results generated. Check Tickers.csv or connection.")
+            
     except Exception as e:
-        print(f"FATAL ERROR: {e}")
+        print(f"❌ FATAL ERROR: {e}")
 
 if __name__ == "__main__":
     run_engine()
