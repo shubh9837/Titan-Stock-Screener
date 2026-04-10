@@ -1,58 +1,62 @@
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-import time, os, datetime
-
-def calculate_alpha_score(df, sector_avg_map):
-    # 1. Technical Indicators
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    adx = ta.adx(df['High'], df['Low'], df['Close'])
-    df['ADX'] = adx['ADX_14']
-    df['EMA_50'] = ta.ema(df['Close'], length=50)
-    
-    # 2. Scoring Logic (Weighted 0-10)
-    # Trend (4 pts) + Momentum (3 pts) + Sector (3 pts)
-    t_score = 0
-    if df['Close'].iloc[-1] > df['EMA_50'].iloc[-1]: t_score += 4
-    if 45 < df['RSI'].iloc[-1] < 65: t_score += 3
-    
-    # Sector Tailwind (Fetched from pre-calculated map)
-    sector = df['SECTOR'].iloc[0]
-    s_score = sector_avg_map.get(sector, 0)
-    
-    final_score = t_score + s_score
-    
-    # 3. Risk Management (ATR Based)
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-    return final_score, df['ATR'].iloc[-1]
+import time, datetime
 
 def run_engine():
-    master = pd.read_csv("Tickers.csv")
-    symbols = [f"{s}.NS" for s in master['SYMBOL'].tolist()]
-    
-    # Batch Download for Speed (200 at a time)
-    results = []
-    chunk_size = 200
-    for i in range(0, len(symbols), chunk_size):
-        batch = symbols[i:i+chunk_size]
-        data = yf.download(batch, period="5d", interval="15m", progress=False)['Close']
+    try:
+        master = pd.read_csv("Tickers.csv")
+        # Ensure symbols are clean and have .NS
+        symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].unique()]
         
-        # Calculate Sector Strength first for this batch
-        # (Simplified logic for the script)
-        for sym in batch:
-            try:
-                price = data[sym].iloc[-1]
-                s_name = master[master['SYMBOL'] == sym.replace(".NS","")]['SECTOR'].values[0]
-                results.append({"SYMBOL": sym.replace(".NS",""), "PRICE": round(price, 2), "SECTOR": s_name})
-            except: continue
+        all_results = []
+        chunk_size = 100 # Reduced slightly for better stability
+        
+        for i in range(0, len(symbols), chunk_size):
+            batch = symbols[i:i+chunk_size]
+            # Download 5 days to ensure TA indicators have enough data points
+            data = yf.download(batch, period="5d", interval="15m", progress=False)
             
-    final_df = pd.DataFrame(results)
-    # Add dummy scores for this example; in production, use the calculate_alpha_score function
-    final_df['SCORE'] = np.random.uniform(5, 9, len(final_df)) 
-    final_df['STOP_LOSS'] = (final_df['PRICE'] * 0.94).round(2)
-    final_df['TARGET'] = (final_df['PRICE'] * 1.12).round(2)
-    
-    final_df.to_csv("daily_analysis.csv", index=False)
+            if data.empty: continue
+            
+            for t in batch:
+                try:
+                    # Robust slicing for multi-index columns
+                    s_price_data = data.iloc[:, data.columns.get_level_values(1) == t]
+                    s_price_data.columns = s_price_data.columns.get_level_values(0)
+                    s_price_data = s_price_data.dropna()
+                    
+                    if len(s_price_data) < 10: continue # Skip if insufficient data
+                    
+                    # Calculate Math
+                    rsi = ta.rsi(s_price_data['Close'], length=14).iloc[-1]
+                    ema50 = ta.ema(s_price_data['Close'], length=50).iloc[-1]
+                    atr = ta.atr(s_price_data['High'], s_price_data['Low'], s_price_data['Close'], length=14).iloc[-1]
+                    
+                    curr_p = s_price_data['Close'].iloc[-1]
+                    
+                    # Scoring Logic
+                    score = 0
+                    if curr_p > ema50: score += 5
+                    if 40 < rsi < 65: score += 3
+                    if rsi > 65: score += 1 # Trend is strong but cooling
+                    
+                    results.append({
+                        "SYMBOL": t.replace(".NS",""),
+                        "PRICE": round(curr_p, 2),
+                        "SCORE": score,
+                        "RSI": round(rsi, 2),
+                        "STOP_LOSS": round(curr_p - (2 * atr), 2),
+                        "TARGET": round(curr_p + (3 * atr), 2)
+                    })
+                except: continue
+            print(f"Processed chunk {i//chunk_size + 1}")
+            time.sleep(0.5)
+
+        pd.DataFrame(results).to_csv("daily_analysis.csv", index=False)
+        print("✅ Sync Success")
+    except Exception as e:
+        print(f"FATAL ERROR: {e}")
 
 if __name__ == "__main__":
     run_engine()
