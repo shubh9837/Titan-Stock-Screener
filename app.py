@@ -43,8 +43,10 @@ def sync_to_github(file_path, content, message):
 
 # --- DYNAMIC CALCULATION ENGINE ---
 def calculate_trade_metrics(row):
+    # Dynamic Expected % based on Score and RSI
     base_target = 10 + (row['SCORE'] * 1.5)
     if row['RSI'] < 40: base_target += 5 
+    # Dynamic Holding Period (Days)
     hold_days = int(25 - (row['SCORE'] * 2))
     return round(base_target, 2), max(5, hold_days)
 
@@ -133,6 +135,47 @@ if df is not None:
                     esym = st.selectbox("Symbol to Exit", list(portfolio.keys()))
                     if st.button("Confirm Sell & Sync"):
                         m_data = df[df['SYMBOL'] == esym].iloc[0]
-                        # Log and Sync History
-                        hist_row = pd.DataFrame([{"SYMBOL": esym, "BUY_DATE": portfolio[esym].get('date', 'N/A'), "EXIT_DATE": str(datetime.date.today()), "BUY_PRICE": portfolio[esym]['price'], "SELL_PRICE": m_data['PRICE'], "P&L_%": round(((
+                        # Fix for the Syntax Error Parentheses
+                        p_n_l = round(((m_data['PRICE'] - portfolio[esym]['price']) / portfolio[esym]['price']) * 100, 2)
                         
+                        hist_row = pd.DataFrame([{
+                            "SYMBOL": esym, 
+                            "BUY_DATE": portfolio[esym].get('date', 'N/A'), 
+                            "EXIT_DATE": str(datetime.date.today()), 
+                            "BUY_PRICE": portfolio[esym]['price'], 
+                            "SELL_PRICE": m_data['PRICE'], 
+                            "P&L_%": p_n_l
+                        }])
+                        
+                        full_hist = pd.concat([history, hist_row], ignore_index=True)
+                        full_hist.to_csv("trade_history.csv", index=False)
+                        sync_to_github("trade_history.csv", full_hist.to_csv(index=False), f"Exit Trade: {esym}")
+                        
+                        del portfolio[esym]
+                        save_portfolio_and_sync(portfolio)
+                        st.rerun()
+
+    # --- TAB 3: ACTIONABLES ---
+    with tabs[2]:
+        st.markdown("### ⚡ Portfolio Insights")
+        if portfolio:
+            for sym in portfolio.keys():
+                m = df[df['SYMBOL'] == sym].iloc[0]
+                if m['SCORE'] < 6: st.markdown(f'<div class="action-card" style="border-left-color: #da3633;">🔴 <b>{sym}</b>: Weak Score ({m["SCORE"]}). Check Verdict.</div>', unsafe_allow_html=True)
+        
+        st.markdown("### 💎 New Alpha Opportunities")
+        new_opps = df[df['SCORE'] >= 8.5].sort_values("SCORE", ascending=False).head(5)
+        for _, r in new_opps.iterrows():
+            st.markdown(f'<div class="action-card" style="border-left-color: #238636;"><b>{r["SYMBOL"]}</b> | CMP: ₹{r["PRICE"]} | <b>Target: ₹{r["TARGET"]} (+{r["EXP_PCT"]}%)</b><br><small>Technical Score: {r["SCORE"]} | RSI: {r["RSI"]} | Est. Hold: {r["HOLD_DAYS"]} days.</small></div>', unsafe_allow_html=True)
+
+    # --- TAB 4: SUCCESS ---
+    with tabs[3]:
+        if not history.empty:
+            st.markdown("### 🏆 Performance Track Record")
+            c1, c2 = st.columns(2)
+            c1.metric("Win Rate", f"{(len(history[history['P&L_%'] > 0])/len(history)*100):.1f}%")
+            c2.metric("Total Trades", len(history))
+            st.dataframe(history.sort_values("EXIT_DATE", ascending=False), use_container_width=True, hide_index=True)
+else:
+    st.error("Engine data (daily_analysis.csv) not found.")
+    
