@@ -1,0 +1,27 @@
+name: 15-Min Market Update
+on:
+  schedule:
+    - cron: '*/15 3-10 * * 1-5' # 9:30 AM to 3:30 PM IST (Mon-Fri)
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install Deps
+        run: pip install yfinance pandas pandas_ta PyGithub
+      - name: Run Engine
+        run: python engine.py
+      - name: Commit & Push
+        run: |
+          git config --global user.name 'Alpha-Bot'
+          git config --global user.email 'bot@titan.com'
+          git add daily_analysis.csv
+          git commit -m "Market Update: $(date)"
+          git push
+
