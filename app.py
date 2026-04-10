@@ -25,30 +25,38 @@ st.markdown("""
 
 # --- GITHUB SYNC ENGINE ---
 def get_github_repo():
-    token = st.secrets["GITHUB_TOKEN"]
-    repo_name = st.secrets["REPO_NAME"]
-    g = Github(token)
-    return g.get_repo(repo_name)
+    try:
+        token = st.secrets["GITHUB_TOKEN"]
+        repo_name = st.secrets["REPO_NAME"]
+        g = Github(token)
+        return g.get_repo(repo_name)
+    except Exception as e:
+        st.error(f"Failed to connect to GitHub: {e}")
+        return None
 
 def sync_to_github(file_path, content, message):
+    repo = get_github_repo()
+    if not repo: return False
     try:
-        repo = get_github_repo()
         try:
             contents = repo.get_contents(file_path)
             repo.update_file(contents.path, message, content, contents.sha)
         except:
             repo.create_file(file_path, message, content)
+        st.toast(f"✅ GitHub Sync Successful: {file_path}", icon="💾")
         return True
     except Exception as e:
-        st.error(f"GitHub Sync Error: {e}")
+        st.error(f"❌ GitHub Sync Error: {e}")
         return False
 
 def load_portfolio_from_github():
     try:
         repo = get_github_repo()
+        if not repo: return {}
         file_content = repo.get_contents("portfolio.json")
-        return json.loads(base64.b64decode(file_content.content).decode())
-    except:
+        data = json.loads(base64.b64decode(file_content.content).decode())
+        return data
+    except Exception as e:
         if os.path.exists("portfolio.json"):
             with open("portfolio.json", "r") as f:
                 return json.load(f)
@@ -83,9 +91,11 @@ portfolio = load_portfolio_from_github()
 
 def save_portfolio_and_sync(p):
     content = json.dumps(p, indent=4)
+    # Save locally as a temporary backup
     with open("portfolio.json", "w") as f:
         f.write(content)
-    sync_to_github("portfolio.json", content, f"UI Update: {datetime.datetime.now()}")
+    # Sync to Cloud
+    sync_to_github("portfolio.json", content, f"Portfolio Update: {datetime.datetime.now()}")
 
 if df is not None:
     tabs = st.tabs(["🔍 SCREENER", "💼 PORTFOLIO", "⚡ ACTIONABLES", "🏆 SUCCESS"])
@@ -105,8 +115,6 @@ if df is not None:
             for _, r in top_picks.iterrows():
                 pick_html += f'<div class="pick-item"><b style="color:#58a6ff;">{r["SYMBOL"]}</b><br><span style="color:#4CAF50;">Target: +{r["EXP_PCT"]:.2f}%</span> | ⏳ {int(r["HOLD_DAYS"])}d</div>'
             st.markdown(pick_html + '</div>', unsafe_allow_html=True)
-        
-        # Display with 2 decimal formatting
         st.dataframe(filtered_df[["VERDICT", "SCORE", "SYMBOL", "PRICE", "TARGET", "EXP_PCT", "HOLD_DAYS", "STOP-LOSS", "RSI", "SECTOR"]].sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
 
     # --- TAB 2: PORTFOLIO ---
@@ -140,15 +148,8 @@ if df is not None:
                 st.markdown("### 📋 Detailed Holdings")
                 styled_pdf = pdf.style.map(lambda x: 'color: #238636' if isinstance(x, (int, float)) and x > 0 else ('color: #da3633' if isinstance(x, (int, float)) and x < 0 else ''), subset=['P&L %'])
                 st.dataframe(styled_pdf, use_container_width=True, hide_index=True)
-                
-                st.markdown("### 🛠️ Portfolio Management Actions")
-                bad_holds = pdf[(pdf['P&L %'] < -4) | (pdf['SCORE'] < 5.5) | (pdf['VERDICT'] == "🔴 EXIT")]
-                if not bad_holds.empty:
-                    for _, row in bad_holds.iterrows():
-                        st.error(f"🚩 **{row['SYMBOL']}**: {row['VERDICT']} | P&L: {row['P&L %']:.2f}% | Action Needed")
-                else: st.success("✅ Your holdings are fundamentally strong.")
         else:
-            st.info("Portfolio is currently empty.")
+            st.info("Your portfolio is currently empty. Data will sync to GitHub upon adding a stock.")
         
         col_add, col_del = st.columns(2)
         with col_add:
@@ -158,7 +159,8 @@ if df is not None:
                 aqty = st.number_input("Quantity", min_value=1, step=1)
                 if st.button("Confirm Addition"):
                     portfolio[asym] = {"price": round(aprc, 2), "qty": int(aqty), "date": str(datetime.date.today())}
-                    save_portfolio_and_sync(portfolio); st.rerun()
+                    save_portfolio_and_sync(portfolio)
+                    st.rerun()
         with col_del:
             if portfolio:
                 with st.expander("➖ Exit Stock"):
@@ -177,7 +179,9 @@ if df is not None:
                         full_h = pd.concat([history, hist_row], ignore_index=True)
                         full_h.to_csv("trade_history.csv", index=False)
                         sync_to_github("trade_history.csv", full_h.to_csv(index=False), f"Trade Exit: {esym}")
-                        del portfolio[esym]; save_portfolio_and_sync(portfolio); st.rerun()
+                        del portfolio[esym]
+                        save_portfolio_and_sync(portfolio)
+                        st.rerun()
 
     # --- TAB 3: ACTIONABLES ---
     with tabs[2]:
@@ -189,8 +193,7 @@ if df is not None:
                 if m['RSI'] > 78 or m['PRICE'] < m['STOP-LOSS'] or m['SCORE'] < 5.5:
                     risk_alert = True
                     st.markdown(f'<div class="action-card" style="border-left-color: #da3633;">⚠️ <b>{s}</b>: Check required (Verdict: {m["VERDICT"]})<br>Price: ₹{m["PRICE"]:.2f} | RSI: {m["RSI"]:.2f} | Score: {m["SCORE"]:.2f}</div>', unsafe_allow_html=True)
-            if not risk_alert: st.success("✅ No urgent risks detected in your portfolio.")
-
+            if not risk_alert: st.success("✅ No urgent risks detected.")
         st.markdown("---")
         st.markdown("### 💎 Fresh Alpha Setups")
         for _, r in df[df['SCORE'] >= 8.5].sort_values("SCORE", ascending=False).head(5).iterrows():
@@ -200,9 +203,7 @@ if df is not None:
     with tabs[3]:
         if not history.empty:
             st.metric("🎯 Win Rate", f"{(len(history[history['P&L_%'] > 0])/len(history)*100):.1f}%")
-            # Rounding history dataframe for display
             display_hist = history.copy()
             numeric_cols = display_hist.select_dtypes(include=[np.number]).columns
             display_hist[numeric_cols] = display_hist[numeric_cols].round(2)
             st.dataframe(display_hist.sort_values("EXIT_DATE", ascending=False), use_container_width=True, hide_index=True)
-            
