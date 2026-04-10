@@ -1,45 +1,53 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+# Switching to 'ta' for better compatibility with GitHub Actions
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator
+from ta.volatility import AverageTrueRange
 import time, datetime
 
 def run_engine():
     try:
         master = pd.read_csv("Tickers.csv")
-        # Ensure symbols are clean and have .NS
         symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].unique()]
         
-        all_results = []
-        chunk_size = 100 # Reduced slightly for better stability
+        results = [] # Renamed from all_results to match the append logic below
+        chunk_size = 100 
         
         for i in range(0, len(symbols), chunk_size):
             batch = symbols[i:i+chunk_size]
-            # Download 5 days to ensure TA indicators have enough data points
             data = yf.download(batch, period="5d", interval="15m", progress=False)
             
             if data.empty: continue
             
             for t in batch:
                 try:
-                    # Robust slicing for multi-index columns
                     s_price_data = data.iloc[:, data.columns.get_level_values(1) == t]
                     s_price_data.columns = s_price_data.columns.get_level_values(0)
                     s_price_data = s_price_data.dropna()
                     
-                    if len(s_price_data) < 10: continue # Skip if insufficient data
+                    if len(s_price_data) < 15: continue 
                     
-                    # Calculate Math
-                    rsi = ta.rsi(s_price_data['Close'], length=14).iloc[-1]
-                    ema50 = ta.ema(s_price_data['Close'], length=50).iloc[-1]
-                    atr = ta.atr(s_price_data['High'], s_price_data['Low'], s_price_data['Close'], length=14).iloc[-1]
+                    # --- MATH SECTION (Formula preserved exactly) ---
+                    # RSI Calculation
+                    rsi_io = RSIIndicator(close=s_price_data['Close'], window=14)
+                    rsi = rsi_io.rsi().iloc[-1]
+
+                    # EMA 50 Calculation
+                    ema_io = EMAIndicator(close=s_price_data['Close'], window=50)
+                    ema50 = ema_io.ema_indicator().iloc[-1]
+
+                    # ATR Calculation
+                    atr_io = AverageTrueRange(high=s_price_data['High'], low=s_price_data['Low'], close=s_price_data['Close'], window=14)
+                    atr = atr_io.average_true_range().iloc[-1]
                     
                     curr_p = s_price_data['Close'].iloc[-1]
                     
-                    # Scoring Logic
+                    # --- SCORING LOGIC (Preserved exactly) ---
                     score = 0
                     if curr_p > ema50: score += 5
                     if 40 < rsi < 65: score += 3
-                    if rsi > 65: score += 1 # Trend is strong but cooling
+                    if rsi > 65: score += 1 
                     
                     results.append({
                         "SYMBOL": t.replace(".NS",""),
