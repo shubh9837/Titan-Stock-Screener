@@ -1,5 +1,7 @@
 streamlit
 pandas
+numpy
 yfinance
 pandas_ta_classic
+PyGithub
 plotly
