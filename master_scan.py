@@ -126,5 +126,14 @@ def run_master_scan():
         supabase.table('market_scans').upsert(results).execute()
         print(f"✅ Master Scan Complete. {len(results)} stocks pushed to database.")
 
-if __name__ == "__main__":
-    run_master_scan()
+if results:
+        # 1. Delete old market data to prevent ghost duplicates
+        try:
+            # We delete everything where the ID is greater than 0 (which is all rows)
+            supabase.table('market_scans').delete().gt('id', 0).execute()
+        except:
+            pass # Fails safely if table is already empty
+            
+        # 2. Push the fresh data
+        supabase.table('market_scans').insert(results).execute()
+        print(f"✅ Master Scan Complete. {len(results)} fresh stocks pushed to database.")
