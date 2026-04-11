@@ -4,7 +4,7 @@ numpy
 yfinance
 pandas_ta
 plotly
-supabase       # Replaces PyGithub for data storage
-feedparser     # For reading Google News/Moneycontrol RSS
-beautifulsoup4 # For web scraping
-requests       # For NSE Corporate Announcements API
+supabase
+vaderSentiment
+feedparser
+beautifulsoup4
