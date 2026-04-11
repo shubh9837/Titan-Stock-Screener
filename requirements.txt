@@ -2,7 +2,7 @@ streamlit
 pandas
 numpy
 yfinance
-pandas_ta
+pandas-ta-classic
 plotly
 supabase
 vaderSentiment
