@@ -2,14 +2,19 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta_classic as ta
 import time
+import os
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import feedparser
 from supabase import create_client
 
 # --- 1. CONFIG & CLOUD DB ---
 # These will be stored in your GitHub Secrets
-SUPABASE_URL = "YOUR_SUPABASE_URL"
-SUPABASE_KEY = "YOUR_SUPABASE_KEY"
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Missing Supabase Secrets! Check GitHub Secrets.")
+
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- 2. SENTIMENT ENGINE ---
