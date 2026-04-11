@@ -39,9 +39,15 @@ def run_master_scan():
             ticker = yf.Ticker(t)
             df = ticker.history(period="6mo", interval="1d")
             
-if df.empty or len(df) < 50: 
-    continue
-    
+for t in symbols: # Scans the FULL list of 2000+ stocks
+        try:
+            ticker = yf.Ticker(t)
+            df = ticker.history(period="6mo", interval="1d")
+            
+            # The newly updated check with correct indentation
+            if df.empty or len(df) < 50:
+                continue
+            
             # --- Technicals ---
             df.ta.ema(length=50, append=True)
             curr_p = df['Close'].iloc[-1]
