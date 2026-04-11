@@ -49,11 +49,11 @@ tabs = st.tabs(["🔍 SCREENER", "💼 PORTFOLIO", "⚡ ACTIONABLES"])
 with tabs[0]:
     if not df.empty:
         st.write("### 💎 High Conviction Setups (Live Sentiment + Technicals)")
-st.dataframe(
-    df[['VERDICT', 'SCORE', 'SYMBOL', 'PRICE', 'EARNINGS_RISK', 'SECTOR_STRENGTH', 'TARGET', 'STOP_LOSS']].sort_values("SCORE", ascending=False), 
-    use_container_width=True, 
-    hide_index=True
-)
+        st.dataframe(
+            df[['VERDICT', 'SCORE', 'SYMBOL', 'PRICE', 'EARNINGS_RISK', 'SECTOR_STRENGTH', 'TARGET', 'STOP_LOSS']].sort_values("SCORE", ascending=False), 
+            use_container_width=True, 
+            hide_index=True
+        )
     else:
         st.warning("Database empty. Awaiting first background engine run.")
 
