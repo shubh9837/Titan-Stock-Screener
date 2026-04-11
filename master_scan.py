@@ -7,6 +7,10 @@ from supabase import create_client
 # 1. Connect to Database
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Missing Supabase Secrets! Check GitHub Secrets.")
+
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def get_earnings_risk(ticker_obj):
@@ -25,21 +29,16 @@ def get_earnings_risk(ticker_obj):
 def run_master_scan():
     print("Initiating Master EOD Scan...")
     
-    # 1. Fetch Market-Wide FII/DII Data (Logic to scrape NSE or Moneycontrol)
-    # institutional_trend = fetch_fii_data() 
-    institutional_trend = "Bullish" # Placeholder for the FII logic
+    # 1. Fetch Market-Wide FII/DII Data (Placeholder logic)
+    institutional_trend = "Bullish"
     
     master = pd.read_csv("Tickers.csv")
     symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
     
     results = []
-    
-    for t in symbols: # Scans the FULL list of 2000+ stocks
-        try:
-            ticker = yf.Ticker(t)
-            df = ticker.history(period="6mo", interval="1d")
-            
-for t in symbols: # Scans the FULL list of 2000+ stocks
+    print(f"🚀 Starting master scan for {len(symbols)} stocks...")
+
+    for t in symbols: 
         try:
             ticker = yf.Ticker(t)
             df = ticker.history(period="6mo", interval="1d")
@@ -54,7 +53,7 @@ for t in symbols: # Scans the FULL list of 2000+ stocks
             
             # --- New Phase 2 Integrations ---
             earnings_risk = get_earnings_risk(ticker)
-            sector_strength = "Outperforming" # Placeholder for Sector Relative Strength logic
+            sector_strength = "Outperforming" # Placeholder for Sector logic
             
             # Base Score
             score = 70 if curr_p > df['EMA_50'].iloc[-1] else 30
@@ -80,7 +79,7 @@ for t in symbols: # Scans the FULL list of 2000+ stocks
             
     if results:
         supabase.table('market_scans').upsert(results).execute()
-        print("✅ Master Scan Complete. Database updated.")
+        print(f"✅ Master Scan Complete. {len(results)} stocks pushed to database.")
 
 if __name__ == "__main__":
     run_master_scan()
