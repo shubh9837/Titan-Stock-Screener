@@ -2,93 +2,265 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 import datetime
+import numpy as np
+import plotly.express as px
 
-# --- 1. CONFIG & STYLING ---
-st.set_page_config(page_title="Titan Quantum Pro", layout="wide", page_icon="📈")
+# --- 1. CONFIG & CUSTOM UI STYLING ---
+st.set_page_config(page_title="Titan Quantum Pro", layout="wide", page_icon="💎")
 
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    .main { background-color: #0d1117; }
-    div[data-testid="stMetric"] { background-color: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 15px; }
-    .action-card { background: #1c2128; border-radius: 10px; padding: 15px; border-left: 5px solid; margin-bottom: 10px; }
+    .main { background-color: #0E1117; color: #FAFAFA;}
+    div[data-testid="stMetric"] { background-color: #1A1C24; border: 1px solid #2D313A; border-radius: 12px; padding: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .gem-card { background: linear-gradient(145deg, #1A1C24, #12141A); border: 1px solid #2D313A; border-radius: 12px; padding: 20px; margin-bottom: 15px; transition: transform 0.2s;}
+    .gem-card:hover { transform: translateY(-5px); border-color: #00FF88;}
+    .action-card-red { background: rgba(255, 75, 75, 0.1); border-left: 4px solid #FF4B4B; padding: 15px; border-radius: 8px; margin-bottom: 10px;}
+    .action-card-green { background: rgba(0, 255, 136, 0.1); border-left: 4px solid #00FF88; padding: 15px; border-radius: 8px; margin-bottom: 10px;}
+    h1, h2, h3 { color: #FFFFFF !important; font-weight: 600 !important;}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CLOUD DATABASE CONNECTION ---
+# --- 2. DATABASE CONNECTION ---
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 supabase = init_connection()
 
-@st.cache_data(ttl=300) # Caches for 5 mins to ensure lightning fast loads
+# --- 3. DATA FETCHING & PREP ---
+@st.cache_data(ttl=300)
 def load_market_data():
-    response = supabase.table('market_scans').select("*").execute()
-    df = pd.DataFrame(response.data)
-    if not df.empty:
-        # Dynamic Verdict based on 100-point scale
-        df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD")
+    res = supabase.table('market_scans').select("*").execute()
+    df = pd.DataFrame(res.data)
+    if df.empty: return df
+    
+    # Clean Nulls
+    df['SECTOR_STRENGTH'] = df['SECTOR_STRENGTH'].fillna("Unknown")
+    df['EARNINGS_RISK'] = df['EARNINGS_RISK'].fillna("✅ Clear")
+    
+    # Calculate extra metrics
+    df['UPSIDE_%'] = ((df['TARGET'] - df['PRICE']) / df['PRICE'] * 100).round(2)
+    df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD")
+    
+    # Dynamic Holding Period Estimate (Score based)
+    df['EST_PERIOD'] = df['SCORE'].apply(lambda x: "1-2 Weeks" if x > 85 else "3-5 Weeks" if x > 65 else "6+ Weeks")
     return df
 
-def load_portfolio():
-    response = supabase.table('portfolio').select("*").execute()
-    return pd.DataFrame(response.data)
+def load_table(table_name):
+    res = supabase.table(table_name).select("*").execute()
+    return pd.DataFrame(res.data)
 
-# --- 3. LOAD DATA ---
 df = load_market_data()
-portfolio_df = load_portfolio()
+port_df = load_table('portfolio')
+hist_df = load_table('trade_history')
 
-# --- 4. UI TABS (Preserving your original layout) ---
-tabs = st.tabs(["🔍 SCREENER", "💼 PORTFOLIO", "⚡ ACTIONABLES"])
+# --- 4. TABS SETUP ---
+st.title("📈 Titan Quantum Pro Dashboard")
+tabs = st.tabs(["📊 Market Screener", "💼 Portfolio", "💎 Swing Gems", "🏆 Success History"])
 
-# --- TAB 1: SCREENER ---
+# ==========================================
+# TAB 1: MARKET SCREENER
+# ==========================================
 with tabs[0]:
     if not df.empty:
-        st.write("### 💎 High Conviction Setups (Live Sentiment + Technicals)")
-        st.dataframe(
-            df[['VERDICT', 'SCORE', 'SYMBOL', 'PRICE', 'EARNINGS_RISK', 'SECTOR_STRENGTH', 'TARGET', 'STOP_LOSS']].sort_values("SCORE", ascending=False), 
-            use_container_width=True, 
-            hide_index=True
-        )
-    else:
-        st.warning("Database empty. Awaiting first background engine run.")
+        # TOP ROW: Filters & Search
+        c1, c2, c3, c4 = st.columns([1.5, 1, 1, 1])
+        search_q = c1.text_input("🔍 Search Stock Symbol", "").upper()
+        min_score = c2.slider("Minimum Confluence Score", 0, 100, 60)
+        min_upside = c3.number_input("Min Expected Upside (%)", value=5)
+        show_alpha = c4.checkbox("💎 Show Only High Conviction", value=False)
+        
+        # Apply Filters
+        filtered_df = df[(df['SCORE'] >= min_score) & (df['UPSIDE_%'] >= min_upside)]
+        if search_q: filtered_df = filtered_df[filtered_df['SYMBOL'].str.contains(search_q)]
+        if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'] == '💎 ALPHA']
+        
+        st.markdown("---")
+        
+        # MIDDLE ROW: Sector Graph
+        st.subheader("🏢 Sector & Theme Distribution (Scanned Stocks)")
+        sector_counts = df['VERDICT'].value_counts().reset_index()
+        sector_counts.columns = ['Verdict', 'Count']
+        fig = px.bar(sector_counts, x='Verdict', y='Count', color='Verdict', 
+                     color_discrete_map={"💎 ALPHA": "#00FF88", "🟢 BUY": "#00B8FF", "🟡 HOLD": "#FFB800"},
+                     height=300, template="plotly_dark")
+        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, use_container_width=True)
 
-# --- TAB 2: PORTFOLIO & EXECUTION ---
+        # BOTTOM ROW: Master Table
+        st.subheader(f"📋 Screened Opportunities ({len(filtered_df)} found)")
+        display_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR_STRENGTH', 'PRICE', 'TARGET', 'UPSIDE_%', 'STOP_LOSS', 'EST_PERIOD', 'EARNINGS_RISK']
+        st.dataframe(filtered_df[display_cols].sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.info("Database empty. Awaiting Master Scan.")
+
+# ==========================================
+# TAB 2: PORTFOLIO MANAGER
+# ==========================================
 with tabs[1]:
-    # Display Current Portfolio
-    if not portfolio_df.empty and not df.empty:
-        st.write("### 🏦 Active Holdings")
-        # Merge portfolio logic here similar to your original code
-        st.dataframe(portfolio_df, use_container_width=True, hide_index=True)
+    if not port_df.empty:
+        # 1. Summary Metrics
+        st.subheader("🏦 Portfolio Summary")
+        port_calc = []
+        for _, row in port_df.iterrows():
+            sym = row['symbol']
+            live_data = df[df['SYMBOL'] == sym]
+            cmp = live_data.iloc[0]['PRICE'] if not live_data.empty else row['entry_price']
+            target = live_data.iloc[0]['TARGET'] if not live_data.empty else 0
+            sl = live_data.iloc[0]['STOP_LOSS'] if not live_data.empty else 0
+            score = live_data.iloc[0]['SCORE'] if not live_data.empty else "N/A"
+            est_period = live_data.iloc[0]['EST_PERIOD'] if not live_data.empty else "N/A"
+            
+            invested = row['entry_price'] * row['qty']
+            cur_val = cmp * row['qty']
+            pnl_perc = ((cmp - row['entry_price']) / row['entry_price']) * 100
+            
+            # Action Icon Logic
+            if cmp <= sl: action = "🚨 EXIT (SL)"
+            elif cmp >= target: action = "✅ BOOK PROFIT"
+            else: action = "⏳ HOLD"
+            
+            port_calc.append({
+                "Action": action, "Symbol": sym, "Score": score, "Qty": row['qty'], "Avg Price": row['entry_price'],
+                "CMP": cmp, "Invested (₹)": round(invested,2), "Current (₹)": round(cur_val,2), "P&L (%)": round(pnl_perc,2),
+                "Target": target, "Stop Loss": sl, "Est. Period": est_period
+            })
+            
+        pdf = pd.DataFrame(port_calc)
+        t_inv, t_cur = pdf['Invested (₹)'].sum(), pdf['Current (₹)'].sum()
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("💰 Total Invested", f"₹{t_inv:,.2f}")
+        c2.metric("📈 Current Value", f"₹{t_cur:,.2f}", f"₹{t_cur - t_inv:,.2f}")
+        c3.metric("🎯 Overall P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
+        
+        # 2. Holdings Table with Total Row
+        st.markdown("---")
+        st.subheader("📂 Current Holdings")
+        
+        # Add Total Row
+        total_row = pd.DataFrame([{
+            "Action": "TOTAL", "Symbol": "-", "Score": "-", "Qty": "-", "Avg Price": "-", "CMP": "-",
+            "Invested (₹)": t_inv, "Current (₹)": t_cur, "P&L (%)": round(((t_cur - t_inv) / t_inv * 100), 2) if t_inv else 0,
+            "Target": "-", "Stop Loss": "-", "Est. Period": "-"
+        }])
+        display_pdf = pd.concat([pdf, total_row], ignore_index=True)
+        
+        # Style the dataframe
+        def style_pnl(val):
+            if isinstance(val, str): return ''
+            color = '#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'
+            return f'color: {color}'
+            
+        st.dataframe(display_pdf.style.applymap(style_pnl, subset=['P&L (%)']), use_container_width=True, hide_index=True)
+
+        # 3. Portfolio Actionables Warnings
+        st.markdown("---")
+        st.subheader("⚡ Urgent Portfolio Actions")
+        action_found = False
+        for _, r in pdf.iterrows():
+            if r['Action'] == "🚨 EXIT (SL)":
+                st.markdown(f"<div class='action-card-red'><b>{r['Symbol']}</b> has breached Stop Loss (₹{r['Stop Loss']}). Current Price: ₹{r['CMP']}. Exit recommended to preserve capital.</div>", unsafe_allow_html=True)
+                action_found = True
+            elif r['Action'] == "✅ BOOK PROFIT":
+                st.markdown(f"<div class='action-card-green'><b>{r['Symbol']}</b> has reached Target (₹{r['Target']}). Consider booking full or partial profits!</div>", unsafe_allow_html=True)
+                action_found = True
+        if not action_found: st.success("All holdings are currently within safe zones. No urgent actions required.")
+    else:
+        st.info("Portfolio is empty. Add a trade below!")
 
     st.markdown("---")
-    with st.expander("➕ Execute New Trade (Risk Management Engine)"):
-        ticker = st.selectbox("Select Alpha Stock", df[df['VERDICT'].isin(['💎 ALPHA', '🟢 BUY'])]['SYMBOL'].unique() if not df.empty else [])
-        if ticker:
-            s_data = df[df['SYMBOL']==ticker].iloc[0]
-            c1, c2 = st.columns(2)
-            cap = c1.number_input("Total Trading Capital", value=100000)
-            risk_p = c2.slider("Risk per trade (%)", 1, 3, 1)
-            
-            # Position Sizing Logic
-            risk_amt = cap * (risk_p/100)
-            risk_per_share = s_data['PRICE'] - s_data['STOP_LOSS']
-            qty = int(risk_amt / risk_per_share) if risk_per_share > 0 else 1
-            
-            st.info(f"💡 Recommended: Buy **{qty}** shares of {ticker}. Total risk: ₹{risk_amt:.0f}")
-            
-            if st.button("Add to Cloud Portfolio"):
-                trade_data = {"symbol": ticker, "entry_price": float(s_data['PRICE']), "qty": qty, "date": str(datetime.date.today())}
-                supabase.table('portfolio').insert(trade_data).execute()
-                st.success(f"{ticker} added successfully!")
-                st.rerun()
+    # 4. Add / Sell Controls
+    col_add, col_sell = st.columns(2)
+    with col_add:
+        with st.expander("➕ Add New Trade"):
+            with st.form("add_trade"):
+                a_sym = st.text_input("Stock Symbol (e.g. RELIANCE)").upper()
+                a_price = st.number_input("Buy Price", min_value=0.0, format="%.2f")
+                a_qty = st.number_input("Quantity", min_value=1, step=1)
+                if st.form_submit_button("Add to Portfolio"):
+                    supabase.table('portfolio').insert({"symbol": a_sym, "entry_price": a_price, "qty": a_qty, "date": str(datetime.date.today())}).execute()
+                    st.success("Trade Added!")
+                    st.rerun()
+                    
+    with col_sell:
+        with st.expander("➖ Register Sale (Full/Partial)"):
+            if not port_df.empty:
+                with st.form("sell_trade"):
+                    s_sym = st.selectbox("Select Holding to Sell", port_df['symbol'].unique())
+                    s_price = st.number_input("Selling Price", min_value=0.0, format="%.2f")
+                    s_qty = st.number_input("Quantity to Sell", min_value=1, step=1)
+                    if st.form_submit_button("Execute Sale"):
+                        # Find holding
+                        holding = port_df[port_df['symbol'] == s_sym].iloc[0]
+                        if s_qty > holding['qty']: st.error("Cannot sell more than you own!")
+                        else:
+                            # Log history
+                            realized = (s_price - holding['entry_price']) * s_qty
+                            perc = ((s_price - holding['entry_price'])/holding['entry_price'])*100
+                            supabase.table('trade_history').insert({
+                                "symbol": s_sym, "sell_price": s_price, "qty_sold": s_qty, "buy_price": holding['entry_price'],
+                                "realized_pl": realized, "pl_percentage": perc, "sell_date": str(datetime.date.today())
+                            }).execute()
+                            
+                            # Update or Delete from Portfolio
+                            new_qty = holding['qty'] - s_qty
+                            if new_qty == 0:
+                                supabase.table('portfolio').delete().eq('id', holding['id']).execute()
+                            else:
+                                supabase.table('portfolio').update({"qty": int(new_qty)}).eq('id', holding['id']).execute()
+                            st.success("Sale Registered!")
+                            st.rerun()
 
-# --- TAB 3: ACTIONABLES (Risk Alerts) ---
+# ==========================================
+# TAB 3: SWING GEMS (Top Actionables)
+# ==========================================
 with tabs[2]:
-    st.markdown("### 🛡️ Live Risk & Exit Alerts")
-    st.info("Cross-referencing live prices against your Portfolio Stop-Loss levels...")
-    # Add logic here to compare portfolio_df entry prices against live df prices
+    st.subheader("💎 Top 5-10 Market Gems")
+    st.write("These setups have the highest confluence scores right now, indicating strong momentum and minimal risk.")
+    if not df.empty:
+        gems = df[df['VERDICT'] == '💎 ALPHA'].sort_values("SCORE", ascending=False).head(10)
+        if gems.empty:
+            gems = df.sort_values("SCORE", ascending=False).head(5) # Fallback if no 85+ scores
+            
+        for _, g in gems.iterrows():
+            st.markdown(f"""
+            <div class="gem-card">
+                <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span></h3>
+                <div style="display:flex; justify-content:space-between;">
+                    <p><b>CMP:</b> ₹{g['PRICE']}</p>
+                    <p style="color:#00FF88;"><b>Target:</b> ₹{g['TARGET']} (+{g['UPSIDE_%']}%)</p>
+                    <p style="color:#FF4B4B;"><b>Stop Loss:</b> ₹{g['STOP_LOSS']}</p>
+                    <p><b>Expected Time:</b> {g['EST_PERIOD']}</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            with st.expander(f"View Deep Dive for {g['SYMBOL']}"):
+                st.write(f"**Earnings Risk:** {g['EARNINGS_RISK']}")
+                st.write(f"**Sector Trend:** {g['SECTOR_STRENGTH']}")
+                st.write(f"**RSI Momentum:** {g['RSI']}")
+    else:
+        st.info("Awaiting data to generate gems.")
+
+# ==========================================
+# TAB 4: SUCCESS HISTORY
+# ==========================================
+with tabs[3]:
+    st.subheader("🏆 Trading Performance History")
+    if not hist_df.empty:
+        wins = len(hist_df[hist_df['realized_pl'] > 0])
+        total_trades = len(hist_df)
+        win_rate = (wins / total_trades) * 100
+        net_pl = hist_df['realized_pl'].sum()
+        
+        c1, c2 = st.columns(2)
+        c1.metric("🎯 Historical Win Rate", f"{win_rate:.1f}%")
+        c2.metric("💰 Total Realized P&L", f"₹{net_pl:,.2f}")
+        
+        st.markdown("---")
+        st.write("**Closed Trades Log**")
+        st.dataframe(hist_df.sort_values('sell_date', ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.info("No closed trades yet. Sell a holding to start building your track record!")
