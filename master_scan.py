@@ -49,7 +49,6 @@ def run_master_scan():
             # --- Fetch Actual Sector/Industry Data ---
             try:
                 info = ticker.info
-                # Tries to get Sector, falls back to Industry, then "Unknown"
                 sector_strength = info.get('sector', info.get('industry', 'Unknown'))
             except:
                 sector_strength = "Unknown"
@@ -58,7 +57,7 @@ def run_master_scan():
             df.ta.ema(length=20, append=True)
             df.ta.ema(length=50, append=True)
             df.ta.rsi(length=14, append=True)
-            df.ta.bbands(length=20, append=True) # Adds Bollinger Bands
+            df.ta.bbands(length=20, append=True) 
             df.ta.atr(length=14, append=True)
             
             # Calculate Relative Volume (RVOL)
@@ -83,26 +82,21 @@ def run_master_scan():
             # --- THE NEW 100-POINT CONFLUENCE ALGORITHM ---
             score = 0
             
-            # 1. Trend Alignment (Max 30 Points)
             if curr_p > ema20: score += 15
             if ema20 > ema50: score += 15
             
-            # 2. RSI Momentum (Max 20 Points)
-            if 55 <= rsi <= 70: score += 20 # Perfect "Goldilocks" zone
-            elif rsi > 70: score += 10 # Slightly overbought, but strong
+            if 55 <= rsi <= 70: score += 20 
+            elif rsi > 70: score += 10 
             
-            # 3. Institutional Footprint - RVOL (Max 25 Points)
-            if rvol > 2.0: score += 25 # 200%+ average volume! Massive conviction.
-            elif rvol > 1.2: score += 15 # Healthy volume surge
+            if rvol > 2.0: score += 25 
+            elif rvol > 1.2: score += 15 
             
-            # 4. Volatility Squeeze (Max 25 Points)
-            if bb_width < 5.0: score += 25 # Extreme squeeze, ready to explode
-            elif bb_width < 10.0: score += 10 # Moderate consolidation
+            if bb_width < 5.0: score += 25 
+            elif bb_width < 10.0: score += 10 
             
-            # --- PENALTIES & RISKS ---
             earnings_risk = get_earnings_risk(ticker)
             if "⚠️" in earnings_risk:
-                score -= 40 # Heavily penalize buying right before an earnings report
+                score -= 40 
             
             results.append({
                 "SYMBOL": t.replace(".NS", ""),
@@ -117,23 +111,21 @@ def run_master_scan():
                 "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
             })
             
-            time.sleep(0.2) # Throttle to avoid Yahoo Finance API bans
+            time.sleep(0.2) 
             
         except Exception as e:
             continue
             
     if results:
-        supabase.table('market_scans').upsert(results).execute()
-        print(f"✅ Master Scan Complete. {len(results)} stocks pushed to database.")
-
-if results:
         # 1. Delete old market data to prevent ghost duplicates
         try:
-            # We delete everything where the ID is greater than 0 (which is all rows)
             supabase.table('market_scans').delete().gt('id', 0).execute()
         except:
-            pass # Fails safely if table is already empty
+            pass 
             
         # 2. Push the fresh data
         supabase.table('market_scans').insert(results).execute()
         print(f"✅ Master Scan Complete. {len(results)} fresh stocks pushed to database.")
+
+if __name__ == "__main__":
+    run_master_scan()
