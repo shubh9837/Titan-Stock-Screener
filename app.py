@@ -57,9 +57,8 @@ port_df = load_table('portfolio')
 hist_df = load_table('trade_history')
 
 # --- 4. TABS SETUP ---
-# App name clearly visible above the tabs
-st.title("💎 Titan Quantum Pro")
-st.markdown("Institutional-Grade Swing Trading & Portfolio Management Dashboard")
+st.markdown("<h1 style='text-align: center; font-size: 45px; color: #00FF88; margin-bottom: 0px;'>💎 Swing Trading & Portfolio Management Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; font-size: 18px; color: #A0AEC0; margin-bottom: 30px;'>Institutional-Grade Algorithmic Execution System</p>", unsafe_allow_html=True)
 
 tabs = st.tabs(["📊 Market Screener", "💼 Portfolio", "🚀 Swing Gems", "🏆 Success History"])
 
