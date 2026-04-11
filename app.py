@@ -61,6 +61,16 @@ st.markdown("<h1 style='text-align: center; font-size: 45px; color: #00FF88; mar
 
 tabs = st.tabs(["📊 Market Screener", "💼 Portfolio", "🚀 Swing Gems", "🏆 Success History"])
 
+# --- SIDEBAR CONTROLS ---
+with st.sidebar:
+    st.markdown("### ⚙️ System Controls")
+    if st.button("🔄 Force Live Data Sync", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+    
+    st.markdown("---")
+    st.caption(f"Last Database Sync: {datetime.datetime.now().strftime('%H:%M:%S')}")
+
 # ==========================================
 # TAB 1: MARKET SCREENER
 # ==========================================
