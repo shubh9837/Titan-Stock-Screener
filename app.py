@@ -57,39 +57,55 @@ port_df = load_table('portfolio')
 hist_df = load_table('trade_history')
 
 # --- 4. TABS SETUP ---
-st.title("📈 Titan Quantum Pro Dashboard")
-tabs = st.tabs(["📊 Market Screener", "💼 Portfolio", "💎 Swing Gems", "🏆 Success History"])
+# App name clearly visible above the tabs
+st.title("💎 Titan Quantum Pro")
+st.markdown("Institutional-Grade Swing Trading & Portfolio Management Dashboard")
+
+tabs = st.tabs(["📊 Market Screener", "💼 Portfolio", "🚀 Swing Gems", "🏆 Success History"])
 
 # ==========================================
 # TAB 1: MARKET SCREENER
 # ==========================================
 with tabs[0]:
     if not df.empty:
-        # TOP ROW: Filters & Search
+        # TOP ROW: Filters & Suggestive Search
         c1, c2, c3, c4 = st.columns([1.5, 1, 1, 1])
-        search_q = c1.text_input("🔍 Search Stock Symbol", "").upper()
-        min_score = c2.slider("Minimum Confluence Score", 0, 100, 60)
-        min_upside = c3.number_input("Min Expected Upside (%)", value=5)
+        
+        # Suggestive Search Bar
+        all_symbols = ["ALL"] + sorted(df['SYMBOL'].dropna().unique().tolist())
+        search_q = c1.selectbox("🔍 Search Stock Symbol", all_symbols)
+        
+        # Unlocked Filters (Defaults show everything)
+        min_score = c2.slider("Minimum Confluence Score", 0, 100, 0)
+        min_upside = c3.number_input("Min Expected Upside (%)", min_value=-100, value=-50) # Allows checking negative upside
         show_alpha = c4.checkbox("💎 Show Only High Conviction", value=False)
         
         # Apply Filters
         filtered_df = df[(df['SCORE'] >= min_score) & (df['UPSIDE_%'] >= min_upside)]
-        if search_q: filtered_df = filtered_df[filtered_df['SYMBOL'].str.contains(search_q)]
+        if search_q != "ALL": filtered_df = filtered_df[filtered_df['SYMBOL'] == search_q]
         if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'] == '💎 ALPHA']
         
         st.markdown("---")
         
-        # MIDDLE ROW: Sector Graph
-        st.subheader("🏢 Sector & Theme Distribution (Scanned Stocks)")
-        sector_counts = df['VERDICT'].value_counts().reset_index()
-        sector_counts.columns = ['Verdict', 'Count']
-        fig = px.bar(sector_counts, x='Verdict', y='Count', color='Verdict', 
-                     color_discrete_map={"💎 ALPHA": "#00FF88", "🟢 BUY": "#00B8FF", "🟡 HOLD": "#FFB800"},
-                     height=300, template="plotly_dark")
-        fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        # MIDDLE ROW: Industry Strength Scoring (Switchable)
+        st.subheader("🏢 Industry Strength Scoring")
+        ind_toggle = st.radio("View Top Industries as:", ["📊 Graph", "📋 Table"], horizontal=True)
+        
+        # Aggregate scores by sector
+        sec_df = df.groupby('SECTOR_STRENGTH')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False).round(2)
+        sec_df.columns = ['Industry / Sector', 'Avg Confluence Score']
+        
+        if "Graph" in ind_toggle:
+            fig2 = px.bar(sec_df, x='Industry / Sector', y='Avg Confluence Score', color='Avg Confluence Score', 
+                          color_continuous_scale='Viridis', height=350, template="plotly_dark")
+            fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.dataframe(sec_df, use_container_width=True, hide_index=True)
 
-        # BOTTOM ROW: Master Table
+        st.markdown("---")
+
+        # BOTTOM ROW: Master Table (Shows all stocks by default now)
         st.subheader(f"📋 Screened Opportunities ({len(filtered_df)} found)")
         display_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR_STRENGTH', 'PRICE', 'TARGET', 'UPSIDE_%', 'STOP_LOSS', 'EST_PERIOD', 'EARNINGS_RISK']
         st.dataframe(filtered_df[display_cols].sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
@@ -101,7 +117,6 @@ with tabs[0]:
 # ==========================================
 with tabs[1]:
     if not port_df.empty:
-        # 1. Summary Metrics
         st.subheader("🏦 Portfolio Summary")
         port_calc = []
         for _, row in port_df.iterrows():
@@ -117,7 +132,6 @@ with tabs[1]:
             cur_val = cmp * row['qty']
             pnl_perc = ((cmp - row['entry_price']) / row['entry_price']) * 100
             
-            # Action Icon Logic
             if cmp <= sl: action = "🚨 EXIT (SL)"
             elif cmp >= target: action = "✅ BOOK PROFIT"
             else: action = "⏳ HOLD"
@@ -136,11 +150,9 @@ with tabs[1]:
         c2.metric("📈 Current Value", f"₹{t_cur:,.2f}", f"₹{t_cur - t_inv:,.2f}")
         c3.metric("🎯 Overall P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
         
-        # 2. Holdings Table with Total Row
         st.markdown("---")
         st.subheader("📂 Current Holdings")
         
-        # Add Total Row
         total_row = pd.DataFrame([{
             "Action": "TOTAL", "Symbol": "-", "Score": "-", "Qty": "-", "Avg Price": "-", "CMP": "-",
             "Invested (₹)": t_inv, "Current (₹)": t_cur, "P&L (%)": round(((t_cur - t_inv) / t_inv * 100), 2) if t_inv else 0,
@@ -148,42 +160,43 @@ with tabs[1]:
         }])
         display_pdf = pd.concat([pdf, total_row], ignore_index=True)
         
-        # Style the dataframe
+        # FIXED: Changed .applymap to .map to fix the Pandas 2.1.0+ AttributeError
         def style_pnl(val):
             if isinstance(val, str): return ''
             color = '#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'
             return f'color: {color}'
             
-        st.dataframe(display_pdf.style.applymap(style_pnl, subset=['P&L (%)']), use_container_width=True, hide_index=True)
+        st.dataframe(display_pdf.style.map(style_pnl, subset=['P&L (%)']), use_container_width=True, hide_index=True)
 
-        # 3. Portfolio Actionables Warnings
         st.markdown("---")
         st.subheader("⚡ Urgent Portfolio Actions")
         action_found = False
         for _, r in pdf.iterrows():
             if r['Action'] == "🚨 EXIT (SL)":
-                st.markdown(f"<div class='action-card-red'><b>{r['Symbol']}</b> has breached Stop Loss (₹{r['Stop Loss']}). Current Price: ₹{r['CMP']}. Exit recommended to preserve capital.</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='action-card-red'><b>{r['Symbol']}</b> has breached Stop Loss (₹{r['Stop Loss']}). Current Price: ₹{r['CMP']}. Exit recommended.</div>", unsafe_allow_html=True)
                 action_found = True
             elif r['Action'] == "✅ BOOK PROFIT":
-                st.markdown(f"<div class='action-card-green'><b>{r['Symbol']}</b> has reached Target (₹{r['Target']}). Consider booking full or partial profits!</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='action-card-green'><b>{r['Symbol']}</b> has reached Target (₹{r['Target']}). Consider booking profits!</div>", unsafe_allow_html=True)
                 action_found = True
-        if not action_found: st.success("All holdings are currently within safe zones. No urgent actions required.")
+        if not action_found: st.success("All holdings are currently within safe zones.")
     else:
         st.info("Portfolio is empty. Add a trade below!")
 
     st.markdown("---")
-    # 4. Add / Sell Controls
     col_add, col_sell = st.columns(2)
     with col_add:
         with st.expander("➕ Add New Trade"):
             with st.form("add_trade"):
-                a_sym = st.text_input("Stock Symbol (e.g. RELIANCE)").upper()
+                # Suggestive search for adding stocks to portfolio
+                available_symbols = sorted(df['SYMBOL'].unique().tolist()) if not df.empty else []
+                a_sym = st.selectbox("Select Stock Symbol", available_symbols)
                 a_price = st.number_input("Buy Price", min_value=0.0, format="%.2f")
                 a_qty = st.number_input("Quantity", min_value=1, step=1)
                 if st.form_submit_button("Add to Portfolio"):
-                    supabase.table('portfolio').insert({"symbol": a_sym, "entry_price": a_price, "qty": a_qty, "date": str(datetime.date.today())}).execute()
-                    st.success("Trade Added!")
-                    st.rerun()
+                    if a_sym:
+                        supabase.table('portfolio').insert({"symbol": a_sym, "entry_price": a_price, "qty": a_qty, "date": str(datetime.date.today())}).execute()
+                        st.success("Trade Added!")
+                        st.rerun()
                     
     with col_sell:
         with st.expander("➖ Register Sale (Full/Partial)"):
@@ -193,11 +206,9 @@ with tabs[1]:
                     s_price = st.number_input("Selling Price", min_value=0.0, format="%.2f")
                     s_qty = st.number_input("Quantity to Sell", min_value=1, step=1)
                     if st.form_submit_button("Execute Sale"):
-                        # Find holding
                         holding = port_df[port_df['symbol'] == s_sym].iloc[0]
                         if s_qty > holding['qty']: st.error("Cannot sell more than you own!")
                         else:
-                            # Log history
                             realized = (s_price - holding['entry_price']) * s_qty
                             perc = ((s_price - holding['entry_price'])/holding['entry_price'])*100
                             supabase.table('trade_history').insert({
@@ -205,7 +216,6 @@ with tabs[1]:
                                 "realized_pl": realized, "pl_percentage": perc, "sell_date": str(datetime.date.today())
                             }).execute()
                             
-                            # Update or Delete from Portfolio
                             new_qty = holding['qty'] - s_qty
                             if new_qty == 0:
                                 supabase.table('portfolio').delete().eq('id', holding['id']).execute()
@@ -215,15 +225,15 @@ with tabs[1]:
                             st.rerun()
 
 # ==========================================
-# TAB 3: SWING GEMS (Top Actionables)
+# TAB 3: SWING GEMS
 # ==========================================
 with tabs[2]:
-    st.subheader("💎 Top 5-10 Market Gems")
+    st.subheader("💎 Top Market Gems")
     st.write("These setups have the highest confluence scores right now, indicating strong momentum and minimal risk.")
     if not df.empty:
         gems = df[df['VERDICT'] == '💎 ALPHA'].sort_values("SCORE", ascending=False).head(10)
         if gems.empty:
-            gems = df.sort_values("SCORE", ascending=False).head(5) # Fallback if no 85+ scores
+            gems = df.sort_values("SCORE", ascending=False).head(5) 
             
         for _, g in gems.iterrows():
             st.markdown(f"""
