@@ -39,8 +39,9 @@ def run_master_scan():
             ticker = yf.Ticker(t)
             df = ticker.history(period="6mo", interval="1d")
             
-            if df.empty: continue
-            
+if df.empty or len(df) < 50: 
+    continue
+    
             # --- Technicals ---
             df.ta.ema(length=50, append=True)
             curr_p = df['Close'].iloc[-1]
