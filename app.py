@@ -3,6 +3,7 @@ import pandas as pd
 from supabase import create_client
 import datetime
 import numpy as np
+import yfinance as yf
 
 st.set_page_config(page_title="Titan Quantum Pro", layout="wide", page_icon="💎")
 
@@ -15,6 +16,9 @@ st.markdown("""
     .gem-card { background: linear-gradient(145deg, #1A1C24, #12141A); border: 1px solid #2D313A; border-radius: 12px; padding: 20px; margin-bottom: 15px;}
     .action-card { background: #1A1C24; border-left: 4px solid #00B8FF; padding: 15px; border-radius: 8px; margin-top: 10px; margin-bottom: 10px;}
     .info-box { background: rgba(0, 184, 255, 0.1); border-left: 4px solid #00B8FF; padding: 15px; border-radius: 8px; margin-top: 20px; font-size: 14px;}
+    .weather-green { background: rgba(0, 255, 136, 0.1); border: 1px solid #00FF88; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
+    .weather-yellow { background: rgba(255, 193, 7, 0.1); border: 1px solid #FFC107; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
+    .weather-red { background: rgba(255, 75, 75, 0.1); border: 1px solid #FF4B4B; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -37,7 +41,6 @@ def load_market_data():
     df = pd.DataFrame(all_data)
     if df.empty: return df
     
-    # Fallback to prevent crashes if DB columns are missing
     expected_cols = ['SECTOR_STRENGTH', 'EARNINGS_RISK', 'CAP_CATEGORY', 'SUPPORT', 'RESISTANCE', 'PATTERN', 'RR_RATIO', 'RVOL']
     for col in expected_cols:
         if col not in df.columns: 
@@ -48,6 +51,25 @@ def load_market_data():
     df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD" if x >= 40 else "🔴 AVOID")
     df['EST_PERIOD'] = df['SCORE'].apply(lambda x: "5-14 Days" if x >= 85 else "15-30 Days" if x >= 65 else "30-45 Days")
     return df
+
+@st.cache_data(ttl=1800) # Cache for 30 mins
+def get_nifty_weather():
+    try:
+        nifty = yf.download("^NSEI", period="3mo", progress=False)
+        if nifty.empty: return "UNKNOWN", "Unable to fetch NIFTY data.", "white"
+        
+        close = float(nifty['Close'].iloc[-1])
+        ema20 = nifty['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
+        ema50 = nifty['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        
+        if close > ema20:
+            return "🟢 RISK ON", f"NIFTY is in a strong uptrend (Above 20 EMA). Safe to deploy full position sizes for swing trades.", "weather-green"
+        elif close > ema50:
+            return "🟡 CAUTION", f"NIFTY is chopping below 20 EMA but holding 50 EMA. Cut position sizes by 50%.", "weather-yellow"
+        else:
+            return "🔴 RISK OFF", f"NIFTY is below 50 EMA (Downtrend). Cash is king. DO NOT take new swing trades today.", "weather-red"
+    except:
+        return "UNKNOWN", "Market weather currently unavailable.", "weather-yellow"
 
 def load_table(table_name):
     res = supabase.table(table_name).select("*").execute()
@@ -64,7 +86,16 @@ with st.sidebar:
         st.rerun()
     st.caption(f"Last Sync: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-st.markdown("<h1 style='text-align: center; font-size: 40px; color: #00FF88; margin-bottom: 0px;'>💎 Titan Quantum Pro</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; font-size: 40px; color: #00FF88; margin-bottom: 5px;'>💎 Titan Quantum Pro</h1>", unsafe_allow_html=True)
+
+# --- MACRO WEATHER FILTER ---
+status, msg, css_class = get_nifty_weather()
+st.markdown(f"""
+<div class="{css_class}">
+    <h3 style='margin:0px;'>Macro Weather: {status}</h3>
+    <p style='margin:0px; font-size:14px;'>{msg}</p>
+</div>
+""", unsafe_allow_html=True)
 
 # System Health Alarm
 if not df.empty and 'UPDATED_AT' in df.columns:
@@ -73,11 +104,8 @@ if not df.empty and 'UPDATED_AT' in df.columns:
         now_utc = datetime.datetime.utcnow()
         delta_hours = (now_utc - latest_update).total_seconds() / 3600
         is_market_hours = now_utc.weekday() < 5 and (4 <= now_utc.hour <= 10)
-        
         if delta_hours > 24 and now_utc.weekday() < 5:
             st.error(f"🔴 CRITICAL ALARM: The Master EOD Scan failed to update! Data is {int(delta_hours)} hours old.", icon="🚨")
-        elif is_market_hours and delta_hours > 1:
-            st.warning(f"⚠️ INTRADAY WARNING: The 15-Minute Pulse missed its schedule.", icon="⚠️")
     except: pass
 
 tabs = st.tabs(["📊 Market Screener", "🎯 Breakout Watchlist", "💼 Portfolio", "🚀 Swing Gems", "🎰 Penny Sandbox", "🏆 History"])
@@ -119,6 +147,28 @@ with tabs[0]:
         disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR_STRENGTH', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
         render_df_with_progress(filtered_df, disp_cols)
 
+        st.divider()
+        with st.expander("📖 Comprehensive Dictionary: Candlesticks & Trading Actionables"):
+            st.markdown("""
+            ### 🕯️ Candlestick Patterns Decoded
+            The algorithm reads price action to assign a label. Here is exactly what to do when you see them:
+            
+            **1. ⚡ Pre-Breakout Squeeze**
+            * **Meaning:** The stock's volatility is dead (Bollinger Bands are pinching tight). It is resting just below a major ceiling (Resistance). A violent move is loading.
+            * **Actionable:** Do NOT buy immediately. Set a price alert on your broker at the exact `Resistance` price. If it crosses that price at 2:00 PM with volume, buy.
+            
+            **2. 🟢 Bullish Engulfing**
+            * **Meaning:** The green candle body completely swallowed yesterday's red candle. Institutional buyers stepped in forcefully to stop the stock from falling further.
+            * **Actionable:** This is a strong reversal signal. If the `Score` is above 70, this is a safe entry point. Place your Stop Loss exactly below yesterday's low.
+            
+            **3. Uptrending / Consolidating**
+            * **Meaning:** The stock is behaving normally within its mathematical averages. No sudden shocks.
+            * **Actionable:** Buy near the `Support` price. Sell near the `Target`. 
+            
+            ### ⏳ Intraday vs. Swing Trading
+            * **Do NOT close these trades on the same day.** * If an alert triggers at 2:00 PM, you are buying the *ignition* of a move. These setups are designed to be held for **3 to 15 days** (Swing Trading) to let the trend play out fully. Let the Trailing Stop Loss manage your exit.
+            """)
+
 # ==========================================
 # TAB 2: BREAKOUT WATCHLIST 
 # ==========================================
@@ -129,9 +179,8 @@ with tabs[1]:
         if not breakouts.empty:
             render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
             
-            # --- ACTIONABLES SUMMARY ---
             st.markdown("---")
-            st.markdown("### 🎯 High-Conviction Actionables")
+            st.markdown("### 🎯 High-Conviction Actionables (The 2:00 PM Strategy)")
             top_breakouts = breakouts.sort_values("SCORE", ascending=False).head(3)
             
             for _, b in top_breakouts.iterrows():
@@ -140,7 +189,8 @@ with tabs[1]:
                 <div class="action-card">
                     <b>{b['SYMBOL']}</b> | Crosses Resistance at <b>₹{b['RESISTANCE']:.2f}</b><br>
                     <i>Why:</i> Institutional momentum score is {b['SCORE']}/100. Upside potential is {b['UPSIDE_%']:.1f}%.<br>
-                    <i>Status:</i> {vol_text}. <b>Action:</b> Set price alert at ₹{b['RESISTANCE']:.2f} and BUY if volume sustains.
+                    <i>Status:</i> {vol_text}.<br>
+                    <b>ACTION PLAN:</b> Look at this stock at 2:00 PM. If the CMP is higher than ₹{b['RESISTANCE']:.2f}, execute a Swing Buy. Hold for days until target hits.
                 </div>
                 """, unsafe_allow_html=True)
         else:
@@ -169,7 +219,7 @@ with tabs[2]:
             qty = int(row['qty'])
             invested = entry * qty
             cur_val = cmp * qty
-            target_val = target * qty # Projected Value
+            target_val = target * qty 
             pnl_perc = ((cmp - entry) / entry) * 100
             
             action = "🚨 EXIT (SL)" if cmp <= trailing_sl else "✅ BOOK PROFIT" if cmp >= target else "⏳ HOLD"
@@ -189,7 +239,6 @@ with tabs[2]:
         c3.metric("🎯 P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
         c4.metric("🚀 Projected (At Target)", f"₹{t_proj:,.2f}")
         
-        # --- PORTFOLIO ACTIONABLES ---
         st.markdown("---")
         st.markdown("### 📋 Executive Action Plan")
         exits = pdf[pdf['Action'] == '🚨 EXIT (SL)']['Symbol'].tolist()
@@ -282,7 +331,6 @@ with tabs[4]:
         if not penny_df.empty:
             render_df_with_progress(penny_df, ['VERDICT', 'SCORE', 'SYMBOL', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL'])
             
-            # --- PENNY ACTIONABLES ---
             st.markdown("---")
             st.markdown("### ⚠️ Operator Alert (Actionables)")
             high_vol_penny = penny_df[penny_df['RVOL'] >= 2.0].sort_values("SCORE", ascending=False).head(2)
