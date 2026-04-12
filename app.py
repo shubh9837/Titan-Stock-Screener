@@ -29,11 +29,24 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- 3. DATA FETCHING & PREP ---
+# --- 3. DATA FETCHING (PAGINATED FOR 2000+ STOCKS) ---
 @st.cache_data(ttl=300)
 def load_market_data():
-    res = supabase.table('market_scans').select("*").execute()
-    df = pd.DataFrame(res.data)
+    all_data = []
+    limit = 1000
+    offset = 0
+    
+    # Loop to bypass Supabase's default 1,000 row API limit
+    while True:
+        res = supabase.table('market_scans').select("*").range(offset, offset + limit - 1).execute()
+        if not res.data:
+            break
+        all_data.extend(res.data)
+        if len(res.data) < limit:
+            break
+        offset += limit
+        
+    df = pd.DataFrame(all_data)
     if df.empty: return df
     
     df['SECTOR_STRENGTH'] = df['SECTOR_STRENGTH'].fillna("Unknown")
