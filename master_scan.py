@@ -135,6 +135,7 @@ if __name__ == "__main__":
                 "PRICE": round(curr_p, 2),
                 "SCORE": max(0, min(100, score)), 
                 "RSI": round(rsi, 2),
+                "RVOL": round(rvol, 2),
                 "TARGET": round(target_price, 2) if atr > 0 else 0,
                 "STOP_LOSS": round(stop_loss_price, 2) if atr > 0 else 0,
                 "RR_RATIO": round(rr_ratio, 2),
