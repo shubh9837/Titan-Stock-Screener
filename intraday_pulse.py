@@ -51,8 +51,8 @@ def run_intraday_pulse():
             live_price = round(ticker.fast_info.last_price, 2) 
             
             # 1. Update the live price in the dashboard
-            supabase.table('market_scans').update({"PRICE": live_price}).eq("SYMBOL", sym).execute()
-            
+supabase.table('market_scans').update({"PRICE": live_price, "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')}).eq("SYMBOL", sym).execute()
+
             # 2. Check for Portfolio Alerts
             port_match = next((p for p in portfolio if p['symbol'] == sym), None)
             if port_match:
