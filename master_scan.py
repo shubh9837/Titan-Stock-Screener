@@ -22,9 +22,11 @@ if __name__ == "__main__":
     symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
     
     # Try to find a Sector or Industry column in your CSV
-    sector_col = None
+sector_col = None
     for col in master.columns:
-        if 'SECTOR' in col.upper() or 'INDUSTRY' in col.upper():
+        col_clean = str(col).upper().replace(" ", "").replace("-", "")
+        # Since your column is named 'SECTOR', this line will catch it instantly:
+        if 'SECTOR' in col_clean or 'INDUSTRY' in col_clean or 'MACRO' in col_clean:
             sector_col = col
             break
             
