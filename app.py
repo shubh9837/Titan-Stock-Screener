@@ -22,6 +22,7 @@ st.markdown("""
     .weather-yellow { background: rgba(255, 193, 7, 0.1); border: 1px solid #FFC107; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
     .weather-red { background: rgba(255, 75, 75, 0.1); border: 1px solid #FF4B4B; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
     .macro-text { margin:0px; font-size:14px; font-weight:500; }
+    .market-expectation { margin-top: 10px; font-size: 15px; font-weight: 600; color: #E2E8F0; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -58,8 +59,9 @@ def load_market_data():
 
 def get_index_data(ticker_symbol):
     try:
+        # Fast 2-day pull to get yesterday's close and today's current
         idx = yf.Ticker(ticker_symbol)
-        hist = idx.history(period="2d")
+        hist = idx.history(period="5d") # Pull 5 days just in case of holidays
         if len(hist) >= 2:
             close_tdy = hist['Close'].iloc[-1]
             close_yst = hist['Close'].iloc[-2]
@@ -68,7 +70,7 @@ def get_index_data(ticker_symbol):
         return None, None
     except: return None, None
 
-@st.cache_data(ttl=600) 
+@st.cache_data(ttl=300) # Fast 5-minute cache for live updates
 def get_macro_weather():
     try:
         ist = pytz.timezone('Asia/Kolkata')
@@ -76,19 +78,43 @@ def get_macro_weather():
         
         # PRE-MARKET: Before 9:30 AM IST (Show Global Cues)
         if now_ist.hour < 9 or (now_ist.hour == 9 and now_ist.minute < 30):
-            gift, gift_pct = get_index_data("GIFNIF.NS") # GIFT Nifty
+            # Try to get GIFT Nifty. yfinance symbol can sometimes be tricky.
+            gift, gift_pct = get_index_data("GIFNIF.NS") 
             sp500, sp_pct = get_index_data("^GSPC")      # S&P 500
             nikkei, nik_pct = get_index_data("^N225")    # Nikkei Japan
             
-            direction = sp_pct if sp_pct is not None else 0
+            # Logic to determine the expectation. 
+            # We prioritize GIFT Nifty if available, otherwise fallback to S&P 500.
+            if gift_pct is not None:
+                direction = gift_pct
+            elif sp_pct is not None:
+                direction = sp_pct
+            else:
+                direction = 0
+
+            # Determine CSS Class and Status
+            status = "🟢 PRE-MARKET: POSITIVE" if direction > 0.2 else "🔴 PRE-MARKET: NEGATIVE" if direction < -0.2 else "🟡 PRE-MARKET: FLAT / CHOPPY"
+            css_class = "weather-green" if direction > 0.2 else "weather-red" if direction < -0.2 else "weather-yellow"
             
-            status = "🟢 PRE-MARKET: POSITIVE" if direction > 0.3 else "🔴 PRE-MARKET: NEGATIVE" if direction < -0.3 else "🟡 PRE-MARKET: FLAT"
-            css_class = "weather-green" if direction > 0.3 else "weather-red" if direction < -0.3 else "weather-yellow"
-            
-            msg = "<b>Global Cues:</b> "
+            # Format the indices string safely
+            msg = "<b>Live Global Cues:</b> "
             msg += f"GIFT Nifty: {gift:.0f} ({gift_pct:+.2f}%) | " if gift else ""
             msg += f"S&P 500: {sp500:.0f} ({sp_pct:+.2f}%) | " if sp500 else ""
             msg += f"Nikkei: {nikkei:.0f} ({nik_pct:+.2f}%)" if nikkei else ""
+            
+            # Format the expectation line
+            if direction > 0.4:
+                expectation = "📈 Expectation: Strong Gap-Up opening for the Indian market today. Look for profit booking initially."
+            elif direction > 0.1:
+                expectation = "↗️ Expectation: Mildly positive opening. Market will look for direction in the first hour."
+            elif direction < -0.4:
+                expectation = "📉 Expectation: Heavy Gap-Down opening. Stay in cash and let the market settle."
+            elif direction < -0.1:
+                expectation = "↘️ Expectation: Mildly negative opening. Support levels will be tested early."
+            else:
+                expectation = "⚖️ Expectation: Flat opening expected. Wait for a clear trend to emerge after 10:00 AM."
+
+            msg += f"<div class='market-expectation'>{expectation}</div>"
             
             return status, msg, css_class
             
@@ -104,14 +130,16 @@ def get_macro_weather():
             ema20 = nifty_hist['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
             ema50 = nifty_hist['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
             
-            idx_str = f"NIFTY: {nifty_val:.0f} ({nifty_pct:+.2f}%) | SENSEX: {sensex_val:.0f} ({sensex_pct:+.2f}%)"
+            idx_str = "<b>Live Indices:</b> "
+            idx_str += f"NIFTY: {nifty_val:.0f} ({nifty_pct:+.2f}%) | " if nifty_val else "NIFTY: Data delayed | "
+            idx_str += f"SENSEX: {sensex_val:.0f} ({sensex_pct:+.2f}%)" if sensex_val else "SENSEX: Data delayed"
             
             if close > ema20:
-                return "🟢 RISK ON", f"{idx_str}<br>NIFTY is in a strong uptrend (Above 20 EMA). Safe to deploy full position sizes.", "weather-green"
+                return "🟢 RISK ON (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is in a strong uptrend (Above 20 EMA). Safe to deploy full position sizes for Swing Trades today.</div>", "weather-green"
             elif close > ema50:
-                return "🟡 CAUTION", f"{idx_str}<br>NIFTY is chopping below 20 EMA but holding 50 EMA. Cut position sizes by 50%.", "weather-yellow"
+                return "🟡 CAUTION (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is chopping below 20 EMA but holding 50 EMA. Cut position sizes by 50%. Focus on high-conviction setups only.</div>", "weather-yellow"
             else:
-                return "🔴 RISK OFF", f"{idx_str}<br>NIFTY is below 50 EMA (Downtrend). Cash is king. DO NOT take new swing trades today.", "weather-red"
+                return "🔴 RISK OFF (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is below 50 EMA (Downtrend). Cash is king. DO NOT take new swing trades today until the trend reverses.</div>", "weather-red"
     except Exception as e:
         return "UNKNOWN", "Macro weather currently unavailable.", "weather-yellow"
 
@@ -189,7 +217,7 @@ with tabs[0]:
         if search_q != "ALL": filtered_df = filtered_df[filtered_df['SYMBOL'] == search_q]
         if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'] == '💎 ALPHA']
         
-        # --- RESTORED TOP 3 SECTORS ---
+        # --- TOP 3 SECTORS ---
         st.markdown("---")
         st.subheader("🏢 Top Performing Industries")
         sec_df = inst_df.groupby('SECTOR_STRENGTH')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False)
