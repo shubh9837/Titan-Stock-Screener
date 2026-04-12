@@ -76,8 +76,8 @@ def get_macro_weather():
         ist = pytz.timezone('Asia/Kolkata')
         now_ist = datetime.datetime.now(ist)
         
-        # PRE-MARKET: Before 9:30 AM IST (Show Global Cues)
-        if now_ist.hour < 9 or (now_ist.hour == 9 and now_ist.minute < 30):
+        # PRE-MARKET: From 12 AM to 9 AM IST (Show Global Cues)
+        if now_ist.hour < 9:
             # Try to get GIFT Nifty. yfinance symbol can sometimes be tricky.
             gift, gift_pct = get_index_data("GIFNIF.NS") 
             sp500, sp_pct = get_index_data("^GSPC")      # S&P 500
@@ -118,7 +118,7 @@ def get_macro_weather():
             
             return status, msg, css_class
             
-        # LIVE MARKET: After 9:30 AM IST (Show Domestic Technicals)
+        # LIVE MARKET: From 9 AM to 12 AM IST (Show Domestic Technicals)
         else:
             nifty_val, nifty_pct = get_index_data("^NSEI")
             sensex_val, sensex_pct = get_index_data("^BSESN")
