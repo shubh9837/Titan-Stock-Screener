@@ -63,7 +63,32 @@ with st.sidebar:
     st.caption(f"Last Sync: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
 st.markdown("<h1 style='text-align: center; font-size: 40px; color: #00FF88; margin-bottom: 0px;'>💎 Titan Quantum Pro</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; font-size: 16px; color: #A0AEC0; margin-bottom: 30px;'>Institutional-Grade Swing Trading & Portfolio Management</p>", unsafe_allow_html=True)
+
+# --- 3.5. SYSTEM HEALTH HEARTBEAT ---
+if not df.empty and 'UPDATED_AT' in df.columns:
+    try:
+        # Get the absolute most recent timestamp from the database
+        latest_update_str = df['UPDATED_AT'].max()
+        latest_update = pd.to_datetime(latest_update_str)
+        now_utc = datetime.datetime.utcnow()
+        
+        # Calculate how long it has been since the engine last ran
+        delta_hours = (now_utc - latest_update).total_seconds() / 3600
+        
+        # Is it currently a weekday (Mon-Fri) during Indian Market Hours?
+        # (Converted to UTC: 4:00 AM to 10:00 AM UTC roughly equals 9:30 AM to 3:30 PM IST)
+        is_market_hours = now_utc.weekday() < 5 and (4 <= now_utc.hour <= 10)
+        
+        # ALARM LOGIC
+        if delta_hours > 24 and now_utc.weekday() < 5:
+            st.error(f"🔴 CRITICAL ALARM: The Master EOD Scan failed to update! Data is {int(delta_hours)} hours old. Please check GitHub Actions logs immediately.", icon="🚨")
+        elif is_market_hours and delta_hours > 1:
+            st.warning(f"⚠️ INTRADAY WARNING: The 15-Minute Pulse has missed its schedule. Live prices may be delayed by {int(delta_hours * 60)} minutes.", icon="⚠️")
+        else:
+            # Everything is healthy!
+            pass 
+    except:
+        pass
 
 # 6 Tabs now!
 tabs = st.tabs(["📊 Market Screener", "🎯 Breakout Watchlist", "💼 Portfolio", "🚀 Swing Gems", "🎰 Penny Sandbox", "🏆 History"])
