@@ -173,8 +173,8 @@ if __name__ == "__main__":
     success_count = 0
     BATCH_SIZE = 100 
 
-    # We can turn workers back up to 5 because ICICI allows higher rate limits than Yahoo
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+# Set to 1 worker for absolute stability with ICICI's rate limits
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         futures = {executor.submit(process_stock, t): t for t in symbols}
         
         for future in concurrent.futures.as_completed(futures):
