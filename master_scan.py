@@ -28,7 +28,7 @@ def process_stock(t):
     """This function processes a single stock. It will be run in parallel by our workers."""
     try:
         # Add a tiny random sleep to prevent hitting Yahoo Finance too hard
-        time.sleep(np.random.uniform(0.5, 1.2)) 
+        time.sleep(np.random.uniform(0.5, 1.5)) 
         
         ticker = yf.Ticker(t)
         df = ticker.history(period="6mo", interval="1d")
@@ -150,8 +150,8 @@ if __name__ == "__main__":
     success_count = 0
     BATCH_SIZE = 100 
 
-    # --- MULTI-THREADING ENGINE (4 Workers) ---
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    # --- MULTI-THREADING ENGINE (2 Workers) ---
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futures = {executor.submit(process_stock, t): t for t in symbols}
         
         for future in concurrent.futures.as_completed(futures):
