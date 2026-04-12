@@ -25,10 +25,11 @@ def safe_float(val, default=0.0):
     return float(val)
 
 def process_stock(t):
-    """This function processes a single stock. It will be run in parallel by our workers."""
+    """This function processes a single stock with heavy stealth applied."""
     try:
-        # Add a tiny random sleep to prevent hitting Yahoo Finance too hard
-        time.sleep(np.random.uniform(0.5, 1.5)) 
+        # --- HEAVY STEALTH JITTER ---
+        # Pauses between 0.8 and 2.0 seconds. Randomization perfectly mimics human browsing.
+        time.sleep(np.random.uniform(0.8, 2.0)) 
         
         ticker = yf.Ticker(t)
         df = ticker.history(period="6mo", interval="1d")
@@ -144,13 +145,14 @@ if __name__ == "__main__":
     master = pd.read_csv("Tickers.csv")
     symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
     
-    print(f"🚀 Engine started. Total targets: {len(symbols)}. Processing with 4 concurrent threads...")
+    # --- VISUAL CONFIRMATION ADDED HERE ---
+    print(f"🚀 Engine started. Total targets: {len(symbols)}. Processing with 2 concurrent threads (STEALTH MODE)...")
 
     batch_results = []
     success_count = 0
     BATCH_SIZE = 100 
 
-    # --- MULTI-THREADING ENGINE (2 Workers) ---
+    # --- LOCKED TO 2 WORKERS ---
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futures = {executor.submit(process_stock, t): t for t in symbols}
         
@@ -162,13 +164,11 @@ if __name__ == "__main__":
                 success_count += 1
                 
             if len(batch_results) >= BATCH_SIZE:
-                # ADDED on_conflict="SYMBOL" TO PREVENT CRASHES
                 supabase.table('market_scans').upsert(batch_results, on_conflict="SYMBOL").execute()
                 print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Total Validated so far: {success_count}")
                 batch_results = [] 
 
     if batch_results: 
-        # ADDED on_conflict="SYMBOL" TO PREVENT CRASHES
         supabase.table('market_scans').upsert(batch_results, on_conflict="SYMBOL").execute()
 
     print(f"✅ Full Multi-Threaded Universe Stream Complete. Validated: {success_count} stocks.")
