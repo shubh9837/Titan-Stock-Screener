@@ -4,9 +4,11 @@ from supabase import create_client
 import datetime
 import numpy as np
 import yfinance as yf
+import pytz
 
 st.set_page_config(page_title="Titan Quantum Pro", layout="wide", page_icon="💎")
 
+# --- UI STYLING ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -19,9 +21,11 @@ st.markdown("""
     .weather-green { background: rgba(0, 255, 136, 0.1); border: 1px solid #00FF88; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
     .weather-yellow { background: rgba(255, 193, 7, 0.1); border: 1px solid #FFC107; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
     .weather-red { background: rgba(255, 75, 75, 0.1); border: 1px solid #FF4B4B; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
+    .macro-text { margin:0px; font-size:14px; font-weight:500; }
     </style>
     """, unsafe_allow_html=True)
 
+# --- DATABASE CONNECTIONS ---
 @st.cache_resource
 def init_connection():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -52,24 +56,64 @@ def load_market_data():
     df['EST_PERIOD'] = df['SCORE'].apply(lambda x: "5-14 Days" if x >= 85 else "15-30 Days" if x >= 65 else "30-45 Days")
     return df
 
-@st.cache_data(ttl=1800) # Cache for 30 mins
-def get_nifty_weather():
+def get_index_data(ticker_symbol):
     try:
-        nifty = yf.download("^NSEI", period="3mo", progress=False)
-        if nifty.empty: return "UNKNOWN", "Unable to fetch NIFTY data.", "white"
+        idx = yf.Ticker(ticker_symbol)
+        hist = idx.history(period="2d")
+        if len(hist) >= 2:
+            close_tdy = hist['Close'].iloc[-1]
+            close_yst = hist['Close'].iloc[-2]
+            pct_change = ((close_tdy - close_yst) / close_yst) * 100
+            return close_tdy, pct_change
+        return None, None
+    except: return None, None
+
+@st.cache_data(ttl=600) 
+def get_macro_weather():
+    try:
+        ist = pytz.timezone('Asia/Kolkata')
+        now_ist = datetime.datetime.now(ist)
         
-        close = float(nifty['Close'].iloc[-1])
-        ema20 = nifty['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
-        ema50 = nifty['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
-        
-        if close > ema20:
-            return "🟢 RISK ON", f"NIFTY is in a strong uptrend (Above 20 EMA). Safe to deploy full position sizes for swing trades.", "weather-green"
-        elif close > ema50:
-            return "🟡 CAUTION", f"NIFTY is chopping below 20 EMA but holding 50 EMA. Cut position sizes by 50%.", "weather-yellow"
+        # PRE-MARKET: Before 9:30 AM IST (Show Global Cues)
+        if now_ist.hour < 9 or (now_ist.hour == 9 and now_ist.minute < 30):
+            gift, gift_pct = get_index_data("GIFNIF.NS") # GIFT Nifty
+            sp500, sp_pct = get_index_data("^GSPC")      # S&P 500
+            nikkei, nik_pct = get_index_data("^N225")    # Nikkei Japan
+            
+            direction = sp_pct if sp_pct is not None else 0
+            
+            status = "🟢 PRE-MARKET: POSITIVE" if direction > 0.3 else "🔴 PRE-MARKET: NEGATIVE" if direction < -0.3 else "🟡 PRE-MARKET: FLAT"
+            css_class = "weather-green" if direction > 0.3 else "weather-red" if direction < -0.3 else "weather-yellow"
+            
+            msg = "<b>Global Cues:</b> "
+            msg += f"GIFT Nifty: {gift:.0f} ({gift_pct:+.2f}%) | " if gift else ""
+            msg += f"S&P 500: {sp500:.0f} ({sp_pct:+.2f}%) | " if sp500 else ""
+            msg += f"Nikkei: {nikkei:.0f} ({nik_pct:+.2f}%)" if nikkei else ""
+            
+            return status, msg, css_class
+            
+        # LIVE MARKET: After 9:30 AM IST (Show Domestic Technicals)
         else:
-            return "🔴 RISK OFF", f"NIFTY is below 50 EMA (Downtrend). Cash is king. DO NOT take new swing trades today.", "weather-red"
-    except:
-        return "UNKNOWN", "Market weather currently unavailable.", "weather-yellow"
+            nifty_val, nifty_pct = get_index_data("^NSEI")
+            sensex_val, sensex_pct = get_index_data("^BSESN")
+            
+            nifty_hist = yf.download("^NSEI", period="3mo", progress=False)
+            if nifty_hist.empty: return "UNKNOWN", "Unable to fetch NIFTY data.", "white"
+            
+            close = float(nifty_hist['Close'].iloc[-1])
+            ema20 = nifty_hist['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
+            ema50 = nifty_hist['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
+            
+            idx_str = f"NIFTY: {nifty_val:.0f} ({nifty_pct:+.2f}%) | SENSEX: {sensex_val:.0f} ({sensex_pct:+.2f}%)"
+            
+            if close > ema20:
+                return "🟢 RISK ON", f"{idx_str}<br>NIFTY is in a strong uptrend (Above 20 EMA). Safe to deploy full position sizes.", "weather-green"
+            elif close > ema50:
+                return "🟡 CAUTION", f"{idx_str}<br>NIFTY is chopping below 20 EMA but holding 50 EMA. Cut position sizes by 50%.", "weather-yellow"
+            else:
+                return "🔴 RISK OFF", f"{idx_str}<br>NIFTY is below 50 EMA (Downtrend). Cash is king. DO NOT take new swing trades today.", "weather-red"
+    except Exception as e:
+        return "UNKNOWN", "Macro weather currently unavailable.", "weather-yellow"
 
 def load_table(table_name):
     res = supabase.table(table_name).select("*").execute()
@@ -79,6 +123,7 @@ df = load_market_data()
 port_df = load_table('portfolio')
 hist_df = load_table('trade_history')
 
+# --- SIDEBAR & HEADER ---
 with st.sidebar:
     st.markdown("### ⚙️ System Controls")
     if st.button("🔄 Force Live Data Sync", use_container_width=True):
@@ -89,11 +134,11 @@ with st.sidebar:
 st.markdown("<h1 style='text-align: center; font-size: 40px; color: #00FF88; margin-bottom: 5px;'>💎 Titan Quantum Pro</h1>", unsafe_allow_html=True)
 
 # --- MACRO WEATHER FILTER ---
-status, msg, css_class = get_nifty_weather()
+status, msg, css_class = get_macro_weather()
 st.markdown(f"""
 <div class="{css_class}">
-    <h3 style='margin:0px;'>Macro Weather: {status}</h3>
-    <p style='margin:0px; font-size:14px;'>{msg}</p>
+    <h3 style='margin:0px;'>{status}</h3>
+    <p class='macro-text'>{msg}</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -108,6 +153,7 @@ if not df.empty and 'UPDATED_AT' in df.columns:
             st.error(f"🔴 CRITICAL ALARM: The Master EOD Scan failed to update! Data is {int(delta_hours)} hours old.", icon="🚨")
     except: pass
 
+# --- UI TABS ---
 tabs = st.tabs(["📊 Market Screener", "🎯 Breakout Watchlist", "💼 Portfolio", "🚀 Swing Gems", "🎰 Penny Sandbox", "🏆 History"])
 
 def render_df_with_progress(data, cols_to_show):
@@ -143,6 +189,21 @@ with tabs[0]:
         if search_q != "ALL": filtered_df = filtered_df[filtered_df['SYMBOL'] == search_q]
         if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'] == '💎 ALPHA']
         
+        # --- RESTORED TOP 3 SECTORS ---
+        st.markdown("---")
+        st.subheader("🏢 Top Performing Industries")
+        sec_df = inst_df.groupby('SECTOR_STRENGTH')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False)
+        sec_df = sec_df[sec_df['SECTOR_STRENGTH'] != 'Unknown']
+        
+        top_3 = sec_df.head(3)
+        for _, r in top_3.iterrows():
+            with st.expander(f"🏆 {r['SECTOR_STRENGTH']} (Avg Score: {r['SCORE']:.1f}/100)"):
+                sec_stocks = inst_df[(inst_df['SECTOR_STRENGTH'] == r['SECTOR_STRENGTH']) & (inst_df['VERDICT'] != '🔴 AVOID')].sort_values('SCORE', ascending=False).head(3)
+                if not sec_stocks.empty:
+                    render_df_with_progress(sec_stocks, ['SYMBOL', 'VERDICT', 'SCORE', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%'])
+                else: st.write("No safe setups found in this sector today.")
+        
+        st.markdown("---")
         st.subheader(f"📋 Master Screener ({len(filtered_df)})")
         disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR_STRENGTH', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
         render_df_with_progress(filtered_df, disp_cols)
@@ -166,7 +227,7 @@ with tabs[0]:
             * **Actionable:** Buy near the `Support` price. Sell near the `Target`. 
             
             ### ⏳ Intraday vs. Swing Trading
-            * **Do NOT close these trades on the same day.** * If an alert triggers at 2:00 PM, you are buying the *ignition* of a move. These setups are designed to be held for **3 to 15 days** (Swing Trading) to let the trend play out fully. Let the Trailing Stop Loss manage your exit.
+            * **Do NOT close these trades on the same day.** If an alert triggers at 2:00 PM, you are buying the *ignition* of a move. These setups are designed to be held for **3 to 15 days** (Swing Trading) to let the trend play out fully. Let the Trailing Stop Loss manage your exit.
             """)
 
 # ==========================================
