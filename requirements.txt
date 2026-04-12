@@ -8,3 +8,4 @@ supabase
 vaderSentiment
 feedparser
 beautifulsoup4
+breeze-connect==1.0.45
