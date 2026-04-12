@@ -46,7 +46,7 @@ def load_market_data():
     df = pd.DataFrame(all_data)
     if df.empty: return df
     
-    expected_cols = ['SECTOR_STRENGTH', 'EARNINGS_RISK', 'CAP_CATEGORY', 'SUPPORT', 'RESISTANCE', 'PATTERN', 'RR_RATIO', 'RVOL']
+    expected_cols = ['SECTOR', 'EARNINGS_RISK', 'CAP_CATEGORY', 'SUPPORT', 'RESISTANCE', 'PATTERN', 'RR_RATIO', 'RVOL']
     for col in expected_cols:
         if col not in df.columns: 
             if col == 'RVOL': df[col] = 0.0
@@ -220,20 +220,20 @@ with tabs[0]:
         # --- TOP 3 SECTORS ---
         st.markdown("---")
         st.subheader("🏢 Top Performing Industries")
-        sec_df = inst_df.groupby('SECTOR_STRENGTH')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False)
-        sec_df = sec_df[sec_df['SECTOR_STRENGTH'] != 'Unknown']
+        sec_df = inst_df.groupby('SECTOR')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False)
+        sec_df = sec_df[sec_df['SECTOR'] != 'Unknown']
         
         top_3 = sec_df.head(3)
         for _, r in top_3.iterrows():
-            with st.expander(f"🏆 {r['SECTOR_STRENGTH']} (Avg Score: {r['SCORE']:.1f}/100)"):
-                sec_stocks = inst_df[(inst_df['SECTOR_STRENGTH'] == r['SECTOR_STRENGTH']) & (inst_df['VERDICT'] != '🔴 AVOID')].sort_values('SCORE', ascending=False).head(3)
+            with st.expander(f"🏆 {r['SECTOR']} (Avg Score: {r['SCORE']:.1f}/100)"):
+                sec_stocks = inst_df[(inst_df['SECTOR'] == r['SECTOR']) & (inst_df['VERDICT'] != '🔴 AVOID')].sort_values('SCORE', ascending=False).head(3)
                 if not sec_stocks.empty:
                     render_df_with_progress(sec_stocks, ['SYMBOL', 'VERDICT', 'SCORE', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%'])
                 else: st.write("No safe setups found in this sector today.")
         
         st.markdown("---")
         st.subheader(f"📋 Master Screener ({len(filtered_df)})")
-        disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR_STRENGTH', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
+        disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
         render_df_with_progress(filtered_df, disp_cols)
 
         st.divider()
