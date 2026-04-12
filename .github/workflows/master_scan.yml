@@ -24,5 +24,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ICICI_APP_KEY: ${{ secrets.ICICI_APP_KEY }}
+          ICICI_SECRET_KEY: ${{ secrets.ICICI_SECRET_KEY }}
+          ICICI_SESSION_TOKEN: ${{ secrets.ICICI_SESSION_TOKEN }}
         run: |
           python master_scan.py
