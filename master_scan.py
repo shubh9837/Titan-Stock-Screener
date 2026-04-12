@@ -27,7 +27,7 @@ def safe_float(val, default=0.0):
 def process_stock(t):
     """This function processes a single stock. It will be run in parallel by our workers."""
     try:
-        # Add a tiny random sleep to prevent all 5 threads from hitting Yahoo Finance at the exact same millisecond
+        # Add a tiny random sleep to prevent hitting Yahoo Finance too hard
         time.sleep(np.random.uniform(0.1, 0.4)) 
         
         ticker = yf.Ticker(t)
@@ -144,19 +144,16 @@ if __name__ == "__main__":
     master = pd.read_csv("Tickers.csv")
     symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
     
-    print(f"🚀 Engine started. Total targets: {len(symbols)}. Processing with 5 concurrent threads...")
+    print(f"🚀 Engine started. Total targets: {len(symbols)}. Processing with 4 concurrent threads...")
 
     batch_results = []
     success_count = 0
     BATCH_SIZE = 100 
 
-    # --- MULTI-THREADING ENGINE ---
-    # We use 5 workers to speed up by ~5x without triggering Yahoo Finance IP Bans
+    # --- MULTI-THREADING ENGINE (4 Workers) ---
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        # Map all symbols to the process_stock function
         futures = {executor.submit(process_stock, t): t for t in symbols}
         
-        # As each thread finishes a stock, collect the result immediately
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             
@@ -164,14 +161,14 @@ if __name__ == "__main__":
                 batch_results.append(result)
                 success_count += 1
                 
-            # If we hit 100 results, push to Supabase to keep streaming live
             if len(batch_results) >= BATCH_SIZE:
-                supabase.table('market_scans').upsert(batch_results).execute()
+                # ADDED on_conflict="SYMBOL" TO PREVENT CRASHES
+                supabase.table('market_scans').upsert(batch_results, on_conflict="SYMBOL").execute()
                 print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Total Validated so far: {success_count}")
-                batch_results = [] # Clear memory for next batch
+                batch_results = [] 
 
-    # Push any leftover stocks that didn't make a full 100-stock batch
     if batch_results: 
-        supabase.table('market_scans').upsert(batch_results).execute()
+        # ADDED on_conflict="SYMBOL" TO PREVENT CRASHES
+        supabase.table('market_scans').upsert(batch_results, on_conflict="SYMBOL").execute()
 
     print(f"✅ Full Multi-Threaded Universe Stream Complete. Validated: {success_count} stocks.")
