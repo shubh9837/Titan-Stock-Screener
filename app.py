@@ -36,16 +36,18 @@ def load_market_data():
     df = pd.DataFrame(res.data)
     if df.empty: return df
     
-    # Clean Nulls
     df['SECTOR_STRENGTH'] = df['SECTOR_STRENGTH'].fillna("Unknown")
     df['EARNINGS_RISK'] = df['EARNINGS_RISK'].fillna("✅ Clear")
+    df['CAP_CATEGORY'] = df['CAP_CATEGORY'].fillna("Unknown")
     
-    # Calculate extra metrics
-    df['UPSIDE_%'] = ((df['TARGET'] - df['PRICE']) / df['PRICE'] * 100).round(2)
-    df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD")
-    
-    # Dynamic Holding Period Estimate (Score based)
+    df['UPSIDE_%'] = ((df['TARGET'] - df['PRICE']) / df['PRICE'] * 100)
+    df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD" if x >= 40 else "🔴 AVOID")
     df['EST_PERIOD'] = df['SCORE'].apply(lambda x: "1-2 Weeks" if x > 85 else "3-5 Weeks" if x > 65 else "6+ Weeks")
+    
+    # Strict 2-decimal formatting for all numerics
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    df[numeric_cols] = df[numeric_cols].round(2)
+    
     return df
 
 def load_table(table_name):
@@ -56,51 +58,45 @@ df = load_market_data()
 port_df = load_table('portfolio')
 hist_df = load_table('trade_history')
 
-# --- 4. TABS SETUP ---
-st.markdown("<h1 style='text-align: center; font-size: 45px; color: #00FF88; margin-bottom: 0px;'>💎 Swing Trading & Portfolio Management Dashboard</h1>", unsafe_allow_html=True)
-
-tabs = st.tabs(["📊 Market Screener", "💼 Portfolio", "🚀 Swing Gems", "🏆 Success History"])
-
 # --- SIDEBAR CONTROLS ---
 with st.sidebar:
     st.markdown("### ⚙️ System Controls")
     if st.button("🔄 Force Live Data Sync", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-    
     st.markdown("---")
     st.caption(f"Last Database Sync: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
+# --- 4. TABS SETUP ---
+st.markdown("<h1 style='text-align: center; font-size: 45px; color: #00FF88; margin-bottom: 0px;'>💎 Swing Trading & Portfolio Management Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; font-size: 18px; color: #A0AEC0; margin-bottom: 30px;'>Institutional-Grade Algorithmic Execution System</p>", unsafe_allow_html=True)
+
+tabs = st.tabs(["📊 Market Screener", "💼 Portfolio", "🚀 Swing Gems", "🎰 Penny / Micro Sandbox", "🏆 Success History"])
+
 # ==========================================
-# TAB 1: MARKET SCREENER
+# TAB 1: MARKET SCREENER (Institutional Only)
 # ==========================================
 with tabs[0]:
     if not df.empty:
-        # TOP ROW: Filters & Suggestive Search
+        # Isolate Institutional Universe (Exclude Penny)
+        inst_df = df[df['CAP_CATEGORY'] != "Penny / Micro Cap"]
+        
         c1, c2, c3, c4 = st.columns([1.5, 1, 1, 1])
-        
-        # Suggestive Search Bar
-        all_symbols = ["ALL"] + sorted(df['SYMBOL'].dropna().unique().tolist())
+        all_symbols = ["ALL"] + sorted(inst_df['SYMBOL'].dropna().unique().tolist())
         search_q = c1.selectbox("🔍 Search Stock Symbol", all_symbols)
-        
-        # Unlocked Filters (Defaults show everything)
         min_score = c2.slider("Minimum Confluence Score", 0, 100, 0)
-        min_upside = c3.number_input("Min Expected Upside (%)", min_value=-100, value=-50) # Allows checking negative upside
+        min_upside = c3.number_input("Min Expected Upside (%)", min_value=-100, value=-50) 
         show_alpha = c4.checkbox("💎 Show Only High Conviction", value=False)
         
-        # Apply Filters
-        filtered_df = df[(df['SCORE'] >= min_score) & (df['UPSIDE_%'] >= min_upside)]
+        filtered_df = inst_df[(inst_df['SCORE'] >= min_score) & (inst_df['UPSIDE_%'] >= min_upside)]
         if search_q != "ALL": filtered_df = filtered_df[filtered_df['SYMBOL'] == search_q]
         if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'] == '💎 ALPHA']
         
         st.markdown("---")
-        
-        # MIDDLE ROW: Industry Strength Scoring (Switchable)
-        st.subheader("🏢 Industry Strength Scoring")
+        st.subheader("🏢 Institutional Industry Strength")
         ind_toggle = st.radio("View Top Industries as:", ["📊 Graph", "📋 Table"], horizontal=True)
         
-        # Aggregate scores by sector
-        sec_df = df.groupby('SECTOR_STRENGTH')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False).round(2)
+        sec_df = inst_df.groupby('SECTOR_STRENGTH')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False).round(2)
         sec_df.columns = ['Industry / Sector', 'Avg Confluence Score']
         
         if "Graph" in ind_toggle:
@@ -112,10 +108,8 @@ with tabs[0]:
             st.dataframe(sec_df, use_container_width=True, hide_index=True)
 
         st.markdown("---")
-
-        # BOTTOM ROW: Master Table (Shows all stocks by default now)
-        st.subheader(f"📋 Screened Opportunities ({len(filtered_df)} found)")
-        display_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR_STRENGTH', 'PRICE', 'TARGET', 'UPSIDE_%', 'STOP_LOSS', 'EST_PERIOD', 'EARNINGS_RISK']
+        st.subheader(f"📋 Institutional Opportunities ({len(filtered_df)} found)")
+        display_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'CAP_CATEGORY', 'SECTOR_STRENGTH', 'PRICE', 'TARGET', 'UPSIDE_%', 'STOP_LOSS', 'EST_PERIOD', 'EARNINGS_RISK']
         st.dataframe(filtered_df[display_cols].sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
     else:
         st.info("Database empty. Awaiting Master Scan.")
@@ -136,8 +130,9 @@ with tabs[1]:
             score = live_data.iloc[0]['SCORE'] if not live_data.empty else "N/A"
             est_period = live_data.iloc[0]['EST_PERIOD'] if not live_data.empty else "N/A"
             
-            invested = row['entry_price'] * row['qty']
-            cur_val = cmp * row['qty']
+            qty = int(row['qty']) # Strict Whole Number
+            invested = row['entry_price'] * qty
+            cur_val = cmp * qty
             pnl_perc = ((cmp - row['entry_price']) / row['entry_price']) * 100
             
             if cmp <= sl: action = "🚨 EXIT (SL)"
@@ -145,9 +140,9 @@ with tabs[1]:
             else: action = "⏳ HOLD"
             
             port_calc.append({
-                "Action": action, "Symbol": sym, "Score": score, "Qty": row['qty'], "Avg Price": row['entry_price'],
-                "CMP": cmp, "Invested (₹)": round(invested,2), "Current (₹)": round(cur_val,2), "P&L (%)": round(pnl_perc,2),
-                "Target": target, "Stop Loss": sl, "Est. Period": est_period
+                "Action": action, "Symbol": sym, "Score": score, "Qty": qty, "Avg Price": round(float(row['entry_price']), 2),
+                "CMP": round(float(cmp), 2), "Invested (₹)": round(invested, 2), "Current (₹)": round(cur_val, 2), 
+                "P&L (%)": round(pnl_perc, 2), "Target": round(float(target), 2), "Stop Loss": round(float(sl), 2), "Est. Period": est_period
             })
             
         pdf = pd.DataFrame(port_calc)
@@ -163,12 +158,11 @@ with tabs[1]:
         
         total_row = pd.DataFrame([{
             "Action": "TOTAL", "Symbol": "-", "Score": "-", "Qty": "-", "Avg Price": "-", "CMP": "-",
-            "Invested (₹)": t_inv, "Current (₹)": t_cur, "P&L (%)": round(((t_cur - t_inv) / t_inv * 100), 2) if t_inv else 0,
+            "Invested (₹)": round(t_inv, 2), "Current (₹)": round(t_cur, 2), "P&L (%)": round(((t_cur - t_inv) / t_inv * 100), 2) if t_inv else 0,
             "Target": "-", "Stop Loss": "-", "Est. Period": "-"
         }])
         display_pdf = pd.concat([pdf, total_row], ignore_index=True)
         
-        # FIXED: Changed .applymap to .map to fix the Pandas 2.1.0+ AttributeError
         def style_pnl(val):
             if isinstance(val, str): return ''
             color = '#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'
@@ -195,14 +189,13 @@ with tabs[1]:
     with col_add:
         with st.expander("➕ Add New Trade"):
             with st.form("add_trade"):
-                # Suggestive search for adding stocks to portfolio
                 available_symbols = sorted(df['SYMBOL'].unique().tolist()) if not df.empty else []
                 a_sym = st.selectbox("Select Stock Symbol", available_symbols)
                 a_price = st.number_input("Buy Price", min_value=0.0, format="%.2f")
                 a_qty = st.number_input("Quantity", min_value=1, step=1)
                 if st.form_submit_button("Add to Portfolio"):
                     if a_sym:
-                        supabase.table('portfolio').insert({"symbol": a_sym, "entry_price": a_price, "qty": a_qty, "date": str(datetime.date.today())}).execute()
+                        supabase.table('portfolio').insert({"symbol": a_sym, "entry_price": a_price, "qty": int(a_qty), "date": str(datetime.date.today())}).execute()
                         st.success("Trade Added!")
                         st.rerun()
                     
@@ -215,20 +208,20 @@ with tabs[1]:
                     s_qty = st.number_input("Quantity to Sell", min_value=1, step=1)
                     if st.form_submit_button("Execute Sale"):
                         holding = port_df[port_df['symbol'] == s_sym].iloc[0]
-                        if s_qty > holding['qty']: st.error("Cannot sell more than you own!")
+                        if s_qty > int(holding['qty']): st.error("Cannot sell more than you own!")
                         else:
-                            realized = (s_price - holding['entry_price']) * s_qty
-                            perc = ((s_price - holding['entry_price'])/holding['entry_price'])*100
+                            realized = round((s_price - holding['entry_price']) * s_qty, 2)
+                            perc = round(((s_price - holding['entry_price'])/holding['entry_price'])*100, 2)
                             supabase.table('trade_history').insert({
-                                "symbol": s_sym, "sell_price": s_price, "qty_sold": s_qty, "buy_price": holding['entry_price'],
+                                "symbol": s_sym, "sell_price": s_price, "qty_sold": int(s_qty), "buy_price": round(holding['entry_price'], 2),
                                 "realized_pl": realized, "pl_percentage": perc, "sell_date": str(datetime.date.today())
                             }).execute()
                             
-                            new_qty = holding['qty'] - s_qty
+                            new_qty = int(holding['qty']) - int(s_qty)
                             if new_qty == 0:
                                 supabase.table('portfolio').delete().eq('id', holding['id']).execute()
                             else:
-                                supabase.table('portfolio').update({"qty": int(new_qty)}).eq('id', holding['id']).execute()
+                                supabase.table('portfolio').update({"qty": new_qty}).eq('id', holding['id']).execute()
                             st.success("Sale Registered!")
                             st.rerun()
 
@@ -236,12 +229,13 @@ with tabs[1]:
 # TAB 3: SWING GEMS
 # ==========================================
 with tabs[2]:
-    st.subheader("💎 Top Market Gems")
-    st.write("These setups have the highest confluence scores right now, indicating strong momentum and minimal risk.")
+    st.subheader("💎 Institutional Market Gems")
+    st.write("Highest confluence scores from Mid, Small, and Large Cap stocks.")
     if not df.empty:
-        gems = df[df['VERDICT'] == '💎 ALPHA'].sort_values("SCORE", ascending=False).head(10)
+        inst_df = df[df['CAP_CATEGORY'] != "Penny / Micro Cap"]
+        gems = inst_df[inst_df['VERDICT'] == '💎 ALPHA'].sort_values("SCORE", ascending=False).head(10)
         if gems.empty:
-            gems = df.sort_values("SCORE", ascending=False).head(5) 
+            gems = inst_df.sort_values("SCORE", ascending=False).head(5) 
             
         for _, g in gems.iterrows():
             st.markdown(f"""
@@ -249,23 +243,44 @@ with tabs[2]:
                 <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span></h3>
                 <div style="display:flex; justify-content:space-between;">
                     <p><b>CMP:</b> ₹{g['PRICE']}</p>
-                    <p style="color:#00FF88;"><b>Target:</b> ₹{g['TARGET']} (+{g['UPSIDE_%']}%)</p>
+                    <p style="color:#00FF88;"><b>Target:</b> ₹{g['TARGET']} (+{g['UPSIDE_%']:.2f}%)</p>
                     <p style="color:#FF4B4B;"><b>Stop Loss:</b> ₹{g['STOP_LOSS']}</p>
                     <p><b>Expected Time:</b> {g['EST_PERIOD']}</p>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             with st.expander(f"View Deep Dive for {g['SYMBOL']}"):
-                st.write(f"**Earnings Risk:** {g['EARNINGS_RISK']}")
+                st.write(f"**Market Cap:** {g['CAP_CATEGORY']}")
                 st.write(f"**Sector Trend:** {g['SECTOR_STRENGTH']}")
+                st.write(f"**Earnings Risk:** {g['EARNINGS_RISK']}")
                 st.write(f"**RSI Momentum:** {g['RSI']}")
     else:
         st.info("Awaiting data to generate gems.")
 
 # ==========================================
-# TAB 4: SUCCESS HISTORY
+# TAB 4: PENNY / MICRO SANDBOX
 # ==========================================
 with tabs[3]:
+    st.subheader("🎰 High-Risk Penny & Micro-Cap Sandbox")
+    st.warning("These stocks are highly volatile, susceptible to manipulation, and carry severe illiquidity risks. Trade with strict capital allocation limits.")
+    
+    if not df.empty and 'CAP_CATEGORY' in df.columns:
+        penny_df = df[df['CAP_CATEGORY'] == "Penny / Micro Cap"]
+        
+        c1, c2 = st.columns([1.5, 1])
+        all_penny = ["ALL"] + sorted(penny_df['SYMBOL'].unique().tolist())
+        p_search = c1.selectbox("Search Micro Cap", all_penny, key="penny_search")
+        
+        if p_search != "ALL": penny_df = penny_df[penny_df['SYMBOL'] == p_search]
+        
+        st.dataframe(penny_df[['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR_STRENGTH', 'PRICE', 'TARGET', 'UPSIDE_%', 'STOP_LOSS']].sort_values("SCORE", ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.info("Awaiting Data Update...")
+
+# ==========================================
+# TAB 5: SUCCESS HISTORY
+# ==========================================
+with tabs[4]:
     st.subheader("🏆 Trading Performance History")
     if not hist_df.empty:
         wins = len(hist_df[hist_df['realized_pl'] > 0])
