@@ -28,7 +28,7 @@ def process_stock(t):
     """This function processes a single stock. It will be run in parallel by our workers."""
     try:
         # Add a tiny random sleep to prevent hitting Yahoo Finance too hard
-        time.sleep(np.random.uniform(0.1, 0.4)) 
+        time.sleep(np.random.uniform(0.5, 1.2)) 
         
         ticker = yf.Ticker(t)
         df = ticker.history(period="6mo", interval="1d")
