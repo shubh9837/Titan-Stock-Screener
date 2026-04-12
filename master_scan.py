@@ -5,7 +5,7 @@ import yfinance as yf
 import time, os
 from supabase import create_client
 
-# --- 1. Database Connect ---
+# --- Database Connect ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -17,15 +17,26 @@ def safe_float(val, default=0.0):
 if __name__ == "__main__":
     print("Initiating Yahoo Bulk API Data Stream...")
 
-    # 1. Load targets
+    # 1. Load targets & map sectors directly from CSV
     master = pd.read_csv("Tickers.csv")
-    # Add .NS for Yahoo Finance compatibility
     symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
+    
+    # Try to find a Sector or Industry column in your CSV
+    sector_col = None
+    for col in master.columns:
+        if 'SECTOR' in col.upper() or 'INDUSTRY' in col.upper():
+            sector_col = col
+            break
+            
+    sector_map = {}
+    if sector_col:
+        # Create a dictionary of {Symbol: Sector}
+        master['Clean_Sym'] = master['SYMBOL'].astype(str).str.strip() + '.NS'
+        sector_map = dict(zip(master['Clean_Sym'], master[sector_col].fillna("Unknown")))
 
     print(f"🚀 Downloading 4 months of data for {len(symbols)} stocks in ONE massive request...")
     
     # 2. THE BULK HACK
-    # This downloads everything in one go, completely bypassing the "rapid fire" IP ban.
     data = yf.download(symbols, period="4mo", group_by="ticker", threads=True, ignore_tz=True)
 
     print(f"✅ Download complete! Processing technical indicators locally in RAM...")
@@ -34,10 +45,9 @@ if __name__ == "__main__":
     success_count = 0
     BATCH_SIZE = 100
 
-    # 3. Process Locally (Lightning Fast)
+    # 3. Process Locally
     for t in symbols:
         try:
-            # Extract this specific stock's data from the bulk payload
             if isinstance(data.columns, pd.MultiIndex):
                 if t not in data.columns.get_level_values(0).unique():
                     continue
@@ -47,7 +57,6 @@ if __name__ == "__main__":
 
             df.dropna(inplace=True)
 
-            # Ignore dead stocks or brand new IPOs
             if df.empty or len(df) < 26:
                 continue
 
@@ -85,7 +94,8 @@ if __name__ == "__main__":
                 bb_lower = safe_float(df['BBL_20_2.0'].iloc[-1])
                 bb_width = (bb_upper - bb_lower) / curr_p * 100 
 
-            pattern = "None"
+            # --- Pattern Fix (No more blank patterns) ---
+            pattern = "Uptrending" if curr_p > ema20 else "Consolidating"
             is_bull_engulf = (close_yst < open_yst) and (open_tdy < close_yst) and (close_tdy > open_yst)
             if is_bull_engulf: pattern = "🟢 Bullish Engulfing"
             
@@ -114,11 +124,12 @@ if __name__ == "__main__":
             turnover = avg_vol * curr_p
             if turnover < 10000000: score -= 30 
 
+            # --- Risk/Reward Fix ---
             target_price = curr_p + (3 * atr)
             stop_loss_price = curr_p - (2 * atr)
             rr_ratio = ((target_price - curr_p) / (curr_p - stop_loss_price)) if (curr_p - stop_loss_price) > 0 else 0
+            if rr_ratio > 10: rr_ratio = 10.0 # Cap ridiculous ratios on penny stocks
 
-            # 4. Save to Results array
             results.append({
                 "SYMBOL": t.replace(".NS", ""),
                 "PRICE": round(curr_p, 2),
@@ -131,14 +142,13 @@ if __name__ == "__main__":
                 "RESISTANCE": round(res_20, 2),
                 "PATTERN": pattern,
                 "EARNINGS_RISK": "✅ Clear",
-                "SECTOR_STRENGTH": "Unknown",
+                "SECTOR_STRENGTH": str(sector_map.get(t, "Unknown")), # Pulled securely from your CSV
                 "INSTITUTIONAL_TREND": "Bullish",
-                "CAP_CATEGORY": "Large/Mid Cap" if curr_p >= 20 else "Penny / Micro Cap",
+                "CAP_CATEGORY": "Large/Mid Cap" if curr_p >= 50 else "Small/Penny Cap",
                 "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
             })
             success_count += 1
 
-            # 5. Push to Database in Batches of 100 to save memory
             if len(results) >= BATCH_SIZE:
                 supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
                 print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Validated: {success_count}")
@@ -147,7 +157,6 @@ if __name__ == "__main__":
         except Exception as e:
             continue
 
-    # Push final batch
     if results: 
         supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
 
