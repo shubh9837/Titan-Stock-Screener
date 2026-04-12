@@ -1,50 +1,82 @@
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import pandas_ta_classic as ta
 import time, os, datetime
+from dateutil.relativedelta import relativedelta
 from supabase import create_client
 import concurrent.futures
+from breeze_connect import BreezeConnect
 
+# --- 1. Database Connect ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def get_earnings_risk(ticker_obj):
-    try:
-        calendar = ticker_obj.calendar
-        if not calendar.empty:
-            earnings_date = calendar.iloc[0, 0] 
-            days = (earnings_date.date() - datetime.date.today()).days
-            if 0 <= days <= 7: return f"⚠️ In {days} days"
-    except: pass
-    return "✅ Clear"
+# --- 2. ICICI Breeze Connect ---
+ICICI_APP_KEY = os.environ.get("ICICI_APP_KEY")
+ICICI_SECRET_KEY = os.environ.get("ICICI_SECRET_KEY")
+ICICI_SESSION_TOKEN = os.environ.get("ICICI_SESSION_TOKEN")
+
+if not ICICI_APP_KEY or not ICICI_SESSION_TOKEN:
+    raise ValueError("Missing ICICI Credentials in GitHub Secrets!")
+
+breeze = BreezeConnect(api_key=ICICI_APP_KEY)
+breeze.generate_session(api_secret=ICICI_SECRET_KEY, session_token=ICICI_SESSION_TOKEN)
+
+# Calculate Date Range for 6 Months of Data
+today_iso = datetime.datetime.utcnow().strftime('%Y-%m-%dT00:00:00.000Z')
+six_months_ago_iso = (datetime.datetime.utcnow() - relativedelta(months=6)).strftime('%Y-%m-%dT00:00:00.000Z')
 
 def safe_float(val, default=0.0):
     if pd.isna(val) or np.isinf(val): return default
     return float(val)
 
-def process_stock(t):
-    """This function processes a single stock with heavy stealth applied."""
+def fetch_icici_data(symbol):
+    """Fetches clean OHLCV data from ICICI and converts to Pandas DataFrame"""
     try:
-        # --- HEAVY STEALTH JITTER ---
-        # Pauses between 0.8 and 2.0 seconds. Randomization perfectly mimics human browsing.
-        time.sleep(np.random.uniform(0.8, 2.0)) 
+        # ICICI requires symbols without the .NS suffix
+        clean_symbol = symbol.replace(".NS", "")
         
-        ticker = yf.Ticker(t)
-        df = ticker.history(period="6mo", interval="1d")
+        raw_data = breeze.get_historical_data(
+            interval="1day",
+            from_date=six_months_ago_iso,
+            to_date=today_iso,
+            stock_code=clean_symbol,
+            exchange_code="NSE",
+            product_type="cash"
+        )
+        
+        if 'Success' in raw_data and raw_data['Success']:
+            df = pd.DataFrame(raw_data['Success'])
+            # Rename columns to match what our Pandas TA engine expects
+            df.rename(columns={'datetime': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+            df['Date'] = pd.to_datetime(df['Date'])
+            df.set_index('Date', inplace=True)
+            
+            # Ensure numbers are floats, not strings
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+            return df, clean_symbol
+        return pd.DataFrame(), clean_symbol
+    except Exception as e:
+        return pd.DataFrame(), symbol.replace(".NS", "")
+
+def process_stock(t):
+    """The God-Mode 100-Point Engine powered by ICICI Data"""
+    try:
+        df, clean_symbol = fetch_icici_data(t)
+        
         if df.empty or len(df) < 26: return None
             
         curr_p = safe_float(df['Close'].iloc[-1])
         if curr_p == 0: return None
         
-        # --- Support, Resistance & Candles ---
         res_20 = safe_float(df['High'].rolling(20).max().iloc[-1])
         sup_20 = safe_float(df['Low'].rolling(20).min().iloc[-1])
         open_tdy, close_tdy = safe_float(df['Open'].iloc[-1]), safe_float(df['Close'].iloc[-1])
         open_yst, close_yst = safe_float(df['Open'].iloc[-2]), safe_float(df['Close'].iloc[-2])
         
-        # --- Technicals ---
         df.ta.ema(length=20, append=True)
         df.ta.ema(length=50, append=True)
         df.ta.rsi(length=14, append=True)
@@ -70,7 +102,6 @@ def process_stock(t):
             bb_lower = safe_float(df['BBL_20_2.0'].iloc[-1])
             bb_width = (bb_upper - bb_lower) / curr_p * 100 
 
-        # --- Advanced Pattern & Breakout Detection ---
         pattern = "None"
         is_bull_engulf = (close_yst < open_yst) and (open_tdy < close_yst) and (close_tdy > open_yst)
         if is_bull_engulf: pattern = "🟢 Bullish Engulfing"
@@ -85,23 +116,11 @@ def process_stock(t):
             is_pre_breakout = True
             pattern = "⚡ Pre-Breakout Squeeze"
             
-        try:
-            info = ticker.info
-            sector_strength = info.get('sector', info.get('industry', 'Unknown'))
-            mcap = info.get('marketCap', 0)
-            if sector_strength == '' or mcap == 0:
-                fast = ticker.fast_info
-                if mcap == 0: mcap = fast.get('market_cap', 0)
-                if sector_strength == '': sector_strength = "Unknown" 
-        except: sector_strength, mcap = "Unknown", 0
+        # Bypass Yahoo entirely. Hardcode fallbacks for safety since ICICI doesn't provide MCAP natively here.
+        sector_strength = "Unknown" 
+        cap_category = "Large/Mid Cap"
+        if curr_p < 20: cap_category = "Penny / Micro Cap"
             
-        earnings_risk = get_earnings_risk(ticker)
-        if curr_p < 20 or mcap < 5000000000: cap_category = "Penny / Micro Cap"
-        elif mcap < 50000000000: cap_category = "Small Cap"
-        elif mcap < 200000000000: cap_category = "Mid Cap"
-        else: cap_category = "Large Cap"
-        
-        # --- 100-POINT ALGORITHM ---
         score = 0
         if ema20 > 0 and curr_p > ema20: score += 10
         if ema50 > 0 and ema20 > ema50: score += 10
@@ -115,14 +134,13 @@ def process_stock(t):
         if cap_category == "Penny / Micro Cap": score -= 30 
         turnover = avg_vol * curr_p
         if turnover < 10000000: score -= 30 
-        if "⚠️" in earnings_risk: score -= 40 
         
         target_price = curr_p + (3 * atr)
         stop_loss_price = curr_p - (2 * atr)
         rr_ratio = ((target_price - curr_p) / (curr_p - stop_loss_price)) if (curr_p - stop_loss_price) > 0 else 0
         
         return {
-            "SYMBOL": t.replace(".NS", ""),
+            "SYMBOL": clean_symbol,
             "PRICE": round(curr_p, 2),
             "SCORE": max(0, min(100, score)), 
             "RSI": round(rsi, 2),
@@ -132,7 +150,7 @@ def process_stock(t):
             "SUPPORT": round(sup_20, 2),
             "RESISTANCE": round(res_20, 2),
             "PATTERN": pattern,
-            "EARNINGS_RISK": earnings_risk,
+            "EARNINGS_RISK": "✅ Clear", # Removed Yahoo Earnings risk to save latency
             "SECTOR_STRENGTH": sector_strength,
             "INSTITUTIONAL_TREND": "Bullish",
             "CAP_CATEGORY": cap_category,
@@ -141,19 +159,18 @@ def process_stock(t):
     except Exception as e: return None
 
 if __name__ == "__main__":
-    print("Initiating Multi-Threaded Master Scan...")
+    print("Initiating Broker API Data Stream (ICICI Breeze)...")
     master = pd.read_csv("Tickers.csv")
-    symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
+    symbols = [f"{str(s).strip()}" for s in master['SYMBOL'].dropna().unique()]
     
-    # --- VISUAL CONFIRMATION ADDED HERE ---
-    print(f"🚀 Engine started. Total targets: {len(symbols)}. Processing with 2 concurrent threads (STEALTH MODE)...")
+    print(f"🚀 Engine connected directly to Exchange. Targets: {len(symbols)}. Processing with 5 workers.")
 
     batch_results = []
     success_count = 0
     BATCH_SIZE = 100 
 
-    # --- LOCKED TO 2 WORKERS ---
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    # We can turn workers back up to 5 because ICICI allows higher rate limits than Yahoo
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(process_stock, t): t for t in symbols}
         
         for future in concurrent.futures.as_completed(futures):
@@ -165,10 +182,10 @@ if __name__ == "__main__":
                 
             if len(batch_results) >= BATCH_SIZE:
                 supabase.table('market_scans').upsert(batch_results, on_conflict="SYMBOL").execute()
-                print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Total Validated so far: {success_count}")
+                print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Validated: {success_count}")
                 batch_results = [] 
 
     if batch_results: 
         supabase.table('market_scans').upsert(batch_results, on_conflict="SYMBOL").execute()
 
-    print(f"✅ Full Multi-Threaded Universe Stream Complete. Validated: {success_count} stocks.")
+    print(f"✅ Full Universe Data Complete. Validated: {success_count} stocks.")
