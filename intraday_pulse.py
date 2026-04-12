@@ -1,88 +1,54 @@
 import os
-import yfinance as yf
+import pandas as pd
 from supabase import create_client
-import requests
+from twilio.rest import Client
 
-# --- 1. Connect to Database ---
+# 1. Connect to Database
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- 2. Twilio WhatsApp Setup ---
+# 2. Connect to Twilio (WhatsApp/SMS)
 TWILIO_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_FROM = os.environ.get("TWILIO_WHATSAPP_NUMBER")
-MY_PHONE = os.environ.get("MY_PHONE_NUMBER")
+TWILIO_FROM = os.environ.get("TWILIO_WHATSAPP_NUMBER") # e.g., 'whatsapp:+14155238886'
+MY_PHONE = os.environ.get("MY_PHONE_NUMBER")           # e.g., 'whatsapp:+919876543210'
 
-def send_whatsapp(body):
-    if not TWILIO_SID or not TWILIO_TOKEN: return
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json"
-    data = {"From": TWILIO_FROM, "To": MY_PHONE, "Body": body}
+def send_alert():
     try:
-        requests.post(url, data=data, auth=(TWILIO_SID, TWILIO_TOKEN))
-        print(f"📲 WhatsApp Alert Sent: {body}")
-    except Exception as e:
-        print("Failed to send WhatsApp:", e)
-
-def run_intraday_pulse():
-    print("⚡ Initiating 15-Minute Intraday Pulse...")
-
-    # Fetch active portfolio
-    res_port = supabase.table('portfolio').select("*").execute()
-    portfolio = res_port.data
-
-    # Fetch Top Gems (Score > 80) and Breakout Watchlist
-    res_gems = supabase.table('market_scans').select("SYMBOL, STOP_LOSS, TARGET, PRICE").gte("SCORE", 80).execute()
-    
-    port_symbols = [p['symbol'] for p in portfolio]
-    gem_symbols = [g['SYMBOL'] for g in res_gems.data]
-
-    watch_symbols = list(set(port_symbols + gem_symbols))
-    if not watch_symbols:
-        print("No active portfolio or gems to track currently.")
-        return
-
-    print(f"Tracking {len(watch_symbols)} high-priority stocks...")
-
-    for sym in watch_symbols:
-        try:
-            ticker = yf.Ticker(sym + ".NS")
-            # fast_info uses a lightweight API endpoint to just grab the live price
-            live_price = round(ticker.fast_info.last_price, 2) 
+        # Fetch only today's Pre-Breakouts
+        res = supabase.table('market_scans').select("*").eq('PATTERN', '⚡ Pre-Breakout Squeeze').execute()
+        df = pd.DataFrame(res.data)
+        
+        if df.empty:
+            msg = "🤖 Titan Quantum: No safe Breakout setups detected at 2:00 PM today. Stay in cash."
+        else:
+            # Get the top 3 highest scoring breakouts
+            top_targets = df.sort_values(by="SCORE", ascending=False).head(3)
+            msg = "⚡ *TITAN QUANTUM: 2:00 PM BREAKOUT PULSE* ⚡\n\n"
             
-            # 1. Update the live price in the dashboard
-supabase.table('market_scans').update({"PRICE": live_price, "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')}).eq("SYMBOL", sym).execute()
+            for _, r in top_targets.iterrows():
+                msg += f"🎯 *{r['SYMBOL']}* (Score: {r['SCORE']})\n"
+                msg += f"CMP: ₹{r['PRICE']} | Resistance: ₹{r['RESISTANCE']}\n"
+                msg += f"Target: ₹{r['TARGET']} | Stop: ₹{r['STOP_LOSS']}\n"
+                msg += f"Action: Set alert at ₹{r['RESISTANCE']}. Buy if it crosses with volume!\n\n"
+                
+            msg += "Strategy: These are SWING TRADES. Hold for days until Target or Stop Loss is hit."
 
-            # 2. Check for Portfolio Alerts
-            port_match = next((p for p in portfolio if p['symbol'] == sym), None)
-            if port_match:
-                # Get limits from the market_scans table
-                db_data = next((g for g in res_gems.data if g['SYMBOL'] == sym), None)
-                if not db_data:
-                    # Fallback fetch if portfolio stock dropped below 80 score
-                    res_single = supabase.table('market_scans').select("STOP_LOSS, TARGET").eq("SYMBOL", sym).execute()
-                    if res_single.data: db_data = res_single.data[0]
-
-                if db_data:
-                    entry = float(port_match['entry_price'])
-                    target = float(db_data['TARGET'])
-                    orig_sl = float(db_data['STOP_LOSS'])
-                    
-                    # Trailing Stop Loss Logic
-                    if live_price > (entry * 1.10): trailing_sl = entry * 1.05
-                    elif live_price > (entry * 1.05): trailing_sl = entry
-                    else: trailing_sl = orig_sl
-                    
-                    # Fire Alerts
-                    if live_price <= trailing_sl:
-                        send_whatsapp(f"🚨 ALERT: {sym} hit Stop Loss (₹{live_price}). Close the trade to protect capital.")
-                    elif live_price >= target:
-                        send_whatsapp(f"✅ ALERT: {sym} hit Target (₹{live_price}). Consider booking profits!")
-                        
-        except Exception as e:
-            continue
-
-    print("✅ Intraday Pulse Complete. Dashboard live prices updated and risk limits checked.")
+        # Send the message
+        client = Client(TWILIO_SID, TWILIO_TOKEN)
+        message = client.messages.create(
+            from_=TWILIO_FROM,
+            body=msg,
+            to=MY_PHONE
+        )
+        print(f"Alert sent successfully! Message SID: {message.sid}")
+        
+    except Exception as e:
+        print(f"Error sending alert: {e}")
 
 if __name__ == "__main__":
-    run_intraday_pulse()
+    if TWILIO_SID and TWILIO_TOKEN:
+        send_alert()
+    else:
+        print("Twilio credentials missing. Skipping WhatsApp alert.")
