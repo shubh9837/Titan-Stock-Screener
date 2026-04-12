@@ -34,8 +34,12 @@ def safe_float(val, default=0.0):
 def fetch_icici_data(symbol):
     """Fetches clean OHLCV data from ICICI and converts to Pandas DataFrame"""
     try:
-        # ICICI requires symbols without the .NS suffix
-        clean_symbol = symbol.replace(".NS", "")
+        # 1. Clean the symbol (Remove spaces and force Uppercase)
+        clean_symbol = symbol.strip().replace(".NS", "").upper()
+        
+        # 2. RATE LIMITER: ICICI allows ~1 request per second. 
+        # Adding this pause ensures we never get blocked.
+        time.sleep(1.1)
         
         raw_data = breeze.get_historical_data(
             interval="1day",
