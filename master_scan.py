@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
             df.dropna(inplace=True)
 
-            if df.empty or len(df) < 26:
+            if df.empty or len(df) < 52:
                 continue
 
             curr_p = safe_float(df['Close'].iloc[-1])
