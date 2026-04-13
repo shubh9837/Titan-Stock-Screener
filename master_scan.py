@@ -145,7 +145,7 @@ if __name__ == "__main__":
                 "RESISTANCE": round(res_20, 2),
                 "PATTERN": pattern,
                 "EARNINGS_RISK": "✅ Clear",
-                "SECTOR_STRENGTH": str(sector_map.get(t, "Unknown")), # Pulled securely from your CSV
+                "SECTOR": str(sector_map.get(t, "Unknown")), # Pulled securely from your CSV
                 "INSTITUTIONAL_TREND": "Bullish",
                 "CAP_CATEGORY": "Large/Mid Cap" if curr_p >= 50 else "Small/Penny Cap",
                 "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
