@@ -34,7 +34,7 @@ if __name__ == "__main__":
         master['Clean_Sym'] = master['SYMBOL'].astype(str).str.strip() + '.NS'
         sector_map = dict(zip(master['Clean_Sym'], master[sector_col].fillna("Unknown")))
 
-    # UPGRADE: Changed to 1y to allow for Weekly Timeframe (MTFA) calculations
+    # UPGRADE: 1y data to allow for Weekly Timeframe (MTFA) calculations
     print(f"🚀 Downloading 1 year of data for {len(symbols)} stocks in ONE massive request...")
     data = yf.download(symbols, period="1y", group_by="ticker", threads=True, ignore_tz=True)
 
@@ -49,6 +49,7 @@ if __name__ == "__main__":
         try:
             if isinstance(data.columns, pd.MultiIndex):
                 if t not in data.columns.get_level_values(0).unique():
+                    print(f"⚠️ SKIPPED {t}: Ticker not found on Yahoo Finance.")
                     continue
                 df = data[t].copy()
             else:
@@ -56,12 +57,19 @@ if __name__ == "__main__":
 
             df.dropna(inplace=True)
 
-            # UPGRADE: Need at least 100 days of data to calculate a 20-Week EMA safely
-            if df.empty or len(df) < 100:
+            # X-RAY VISION: Log why stocks are skipped
+            if df.empty:
+                print(f"⚠️ SKIPPED {t}: Zero trading data returned.")
+                continue
+
+            if len(df) < 100:
+                print(f"⚠️ SKIPPED {t}: Only {len(df)} days of data (< 100 required for MTFA).")
                 continue
 
             curr_p = safe_float(df['Close'].iloc[-1])
-            if curr_p == 0: continue
+            if curr_p == 0: 
+                print(f"⚠️ SKIPPED {t}: Last traded price is zero (Suspended).")
+                continue
 
             # --- UPGRADE: MTFA (Multi-Timeframe Alignment) ---
             # Compress daily data into Weekly data
@@ -118,7 +126,7 @@ if __name__ == "__main__":
                 is_pre_breakout = True
                 pattern = "⚡ Pre-Breakout Squeeze"
 
-            # --- PRESERVED & UPGRADED: Core Algorithm Score ---
+            # --- Core Algorithm Score ---
             score = 0
             if ema20 > 0 and curr_p > ema20: score += 10
             if ema50 > 0 and ema20 > ema50: score += 10
@@ -129,13 +137,14 @@ if __name__ == "__main__":
             elif bb_width < 5.0: score += 15 
             if is_bull_engulf: score += 20 
 
-            # UPGRADE: Add the MTFA Institutional Trend Score
+            # MTFA Institutional Trend Score
             if weekly_trend == "Bullish": score += 20
 
-            # FUNDAMENTAL SHIELD: Heavy penalties for dangerous liquidity/pricing
-            if curr_p < 20: score -= 30 
+            # --- UPGRADE: The "Suzlon Fix" (Liquidity Filter) ---
             turnover = avg_vol * curr_p
-            if turnover < 10000000: score -= 30 
+            # Penalize strictly if turnover is less than ₹2 Crores daily (Illiquid/Manipulation risk)
+            if turnover < 20000000: 
+                score -= 30 
 
             # --- PRESERVED: Risk/Reward Fix ---
             target_price = curr_p + (3 * atr)
@@ -157,8 +166,9 @@ if __name__ == "__main__":
                 "PATTERN": pattern,
                 "EARNINGS_RISK": "✅ Clear",
                 "SECTOR": str(sector_map.get(t, "Unknown")),
-                "INSTITUTIONAL_TREND": weekly_trend, # Passed the weekly MTFA calculation to DB
-                "CAP_CATEGORY": "Large/Mid Cap" if curr_p >= 50 else "Small/Penny Cap",
+                "INSTITUTIONAL_TREND": weekly_trend,
+                # UPGRADE: Categories are now based on actual liquidity, not arbitrary price
+                "CAP_CATEGORY": "Large/Mid Cap" if turnover >= 20000000 else "Small/Penny Cap",
                 "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
             })
             success_count += 1
@@ -169,6 +179,8 @@ if __name__ == "__main__":
                 results = [] 
 
         except Exception as e:
+            # X-RAY VISION: Catch the exact math error breaking the stock
+            print(f"❌ CRASH ON {t}: {str(e)}")
             continue
 
     if results: 
