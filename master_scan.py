@@ -25,21 +25,18 @@ if __name__ == "__main__":
     sector_col = None
     for col in master.columns:
         col_clean = str(col).upper().replace(" ", "").replace("-", "")
-        # Since your column is named 'SECTOR', this line will catch it instantly:
         if 'SECTOR' in col_clean or 'INDUSTRY' in col_clean or 'MACRO' in col_clean:
             sector_col = col
             break
             
     sector_map = {}
     if sector_col:
-        # Create a dictionary of {Symbol: Sector}
         master['Clean_Sym'] = master['SYMBOL'].astype(str).str.strip() + '.NS'
         sector_map = dict(zip(master['Clean_Sym'], master[sector_col].fillna("Unknown")))
 
-    print(f"🚀 Downloading 4 months of data for {len(symbols)} stocks in ONE massive request...")
-    
-    # 2. THE BULK HACK
-    data = yf.download(symbols, period="4mo", group_by="ticker", threads=True, ignore_tz=True)
+    # UPGRADE: Changed to 1y to allow for Weekly Timeframe (MTFA) calculations
+    print(f"🚀 Downloading 1 year of data for {len(symbols)} stocks in ONE massive request...")
+    data = yf.download(symbols, period="1y", group_by="ticker", threads=True, ignore_tz=True)
 
     print(f"✅ Download complete! Processing technical indicators locally in RAM...")
 
@@ -59,13 +56,23 @@ if __name__ == "__main__":
 
             df.dropna(inplace=True)
 
-            if df.empty or len(df) < 52:
+            # UPGRADE: Need at least 100 days of data to calculate a 20-Week EMA safely
+            if df.empty or len(df) < 100:
                 continue
 
             curr_p = safe_float(df['Close'].iloc[-1])
             if curr_p == 0: continue
 
-            # --- Technical Math ---
+            # --- UPGRADE: MTFA (Multi-Timeframe Alignment) ---
+            # Compress daily data into Weekly data
+            df_w = df.resample('W-FRI').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+            df_w.ta.ema(length=20, append=True)
+            weekly_ema20 = safe_float(df_w['EMA_20'].iloc[-1] if 'EMA_20' in df_w else 0)
+            
+            # Check if the macro trend is safe
+            weekly_trend = "Bullish" if curr_p > weekly_ema20 and weekly_ema20 > 0 else "Bearish"
+
+            # --- PRESERVED: Your Exact Technical Math ---
             res_20 = safe_float(df['High'].rolling(20).max().iloc[-1])
             sup_20 = safe_float(df['Low'].rolling(20).min().iloc[-1])
             open_tdy, close_tdy = safe_float(df['Open'].iloc[-1]), safe_float(df['Close'].iloc[-1])
@@ -96,7 +103,7 @@ if __name__ == "__main__":
                 bb_lower = safe_float(df['BBL_20_2.0'].iloc[-1])
                 bb_width = (bb_upper - bb_lower) / curr_p * 100 
 
-            # --- Pattern Fix (No more blank patterns) ---
+            # --- PRESERVED: Your Pattern Fix ---
             pattern = "Uptrending" if curr_p > ema20 else "Consolidating"
             is_bull_engulf = (close_yst < open_yst) and (open_tdy < close_yst) and (close_tdy > open_yst)
             if is_bull_engulf: pattern = "🟢 Bullish Engulfing"
@@ -111,7 +118,7 @@ if __name__ == "__main__":
                 is_pre_breakout = True
                 pattern = "⚡ Pre-Breakout Squeeze"
 
-            # --- Core Algorithm Score ---
+            # --- PRESERVED & UPGRADED: Core Algorithm Score ---
             score = 0
             if ema20 > 0 and curr_p > ema20: score += 10
             if ema50 > 0 and ema20 > ema50: score += 10
@@ -122,15 +129,19 @@ if __name__ == "__main__":
             elif bb_width < 5.0: score += 15 
             if is_bull_engulf: score += 20 
 
+            # UPGRADE: Add the MTFA Institutional Trend Score
+            if weekly_trend == "Bullish": score += 20
+
+            # FUNDAMENTAL SHIELD: Heavy penalties for dangerous liquidity/pricing
             if curr_p < 20: score -= 30 
             turnover = avg_vol * curr_p
             if turnover < 10000000: score -= 30 
 
-            # --- Risk/Reward Fix ---
+            # --- PRESERVED: Risk/Reward Fix ---
             target_price = curr_p + (3 * atr)
             stop_loss_price = curr_p - (2 * atr)
             rr_ratio = ((target_price - curr_p) / (curr_p - stop_loss_price)) if (curr_p - stop_loss_price) > 0 else 0
-            if rr_ratio > 10: rr_ratio = 10.0 # Cap ridiculous ratios on penny stocks
+            if rr_ratio > 10: rr_ratio = 10.0 
 
             results.append({
                 "SYMBOL": t.replace(".NS", ""),
@@ -145,8 +156,8 @@ if __name__ == "__main__":
                 "RESISTANCE": round(res_20, 2),
                 "PATTERN": pattern,
                 "EARNINGS_RISK": "✅ Clear",
-                "SECTOR": str(sector_map.get(t, "Unknown")), # Pulled securely from your CSV
-                "INSTITUTIONAL_TREND": "Bullish",
+                "SECTOR": str(sector_map.get(t, "Unknown")),
+                "INSTITUTIONAL_TREND": weekly_trend, # Passed the weekly MTFA calculation to DB
                 "CAP_CATEGORY": "Large/Mid Cap" if curr_p >= 50 else "Small/Penny Cap",
                 "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
             })
