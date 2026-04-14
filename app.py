@@ -33,7 +33,7 @@ def init_connection():
 
 supabase = init_connection()
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300) # Caches data for 5 minutes. Refresh page to pull live CMPs from Supabase
 def load_market_data():
     all_data, limit, offset = [], 1000, 0
     while True:
@@ -54,14 +54,14 @@ def load_market_data():
             
     df['UPSIDE_%'] = ((df['TARGET'] - df['PRICE']) / df['PRICE'] * 100)
     df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD" if x >= 40 else "🔴 AVOID")
+    # Generating the EST_PERIOD here
     df['EST_PERIOD'] = df['SCORE'].apply(lambda x: "5-14 Days" if x >= 85 else "15-30 Days" if x >= 65 else "30-45 Days")
     return df
 
 def get_index_data(ticker_symbol):
     try:
-        # Fast 2-day pull to get yesterday's close and today's current
         idx = yf.Ticker(ticker_symbol)
-        hist = idx.history(period="5d") # Pull 5 days just in case of holidays
+        hist = idx.history(period="5d") 
         if len(hist) >= 2:
             close_tdy = hist['Close'].iloc[-1]
             close_yst = hist['Close'].iloc[-2]
@@ -70,67 +70,58 @@ def get_index_data(ticker_symbol):
         return None, None
     except: return None, None
 
-@st.cache_data(ttl=300) # Fast 5-minute cache for live updates
+@st.cache_data(ttl=300) 
 def get_macro_weather():
     try:
         ist = pytz.timezone('Asia/Kolkata')
         now_ist = datetime.datetime.now(ist)
         
-        # PRE-MARKET: From 12 AM to 9 AM IST (Show Global Cues)
+        # PRE-MARKET: From 12 AM to 9 AM IST (Global Cues)
         if now_ist.hour < 9:
-            # Try to get GIFT Nifty. yfinance symbol can sometimes be tricky.
             gift, gift_pct = get_index_data("GIFNIF.NS") 
-            sp500, sp_pct = get_index_data("^GSPC")      # S&P 500
-            nikkei, nik_pct = get_index_data("^N225")    # Nikkei Japan
+            sp500, sp_pct = get_index_data("^GSPC")      
+            nikkei, nik_pct = get_index_data("^N225")    
             
-            # Logic to determine the expectation. 
-            # We prioritize GIFT Nifty if available, otherwise fallback to S&P 500.
-            if gift_pct is not None:
-                direction = gift_pct
-            elif sp_pct is not None:
-                direction = sp_pct
-            else:
-                direction = 0
+            if gift_pct is not None: direction = gift_pct
+            elif sp_pct is not None: direction = sp_pct
+            else: direction = 0
 
-            # Determine CSS Class and Status
             status = "🟢 PRE-MARKET: POSITIVE" if direction > 0.2 else "🔴 PRE-MARKET: NEGATIVE" if direction < -0.2 else "🟡 PRE-MARKET: FLAT / CHOPPY"
             css_class = "weather-green" if direction > 0.2 else "weather-red" if direction < -0.2 else "weather-yellow"
             
-            # Format the indices string safely
             msg = "<b>Live Global Cues:</b> "
             msg += f"GIFT Nifty: {gift:.0f} ({gift_pct:+.2f}%) | " if gift else ""
             msg += f"S&P 500: {sp500:.0f} ({sp_pct:+.2f}%) | " if sp500 else ""
             msg += f"Nikkei: {nikkei:.0f} ({nik_pct:+.2f}%)" if nikkei else ""
             
-            # Format the expectation line
-            if direction > 0.4:
-                expectation = "📈 Expectation: Strong Gap-Up opening for the Indian market today. Look for profit booking initially."
-            elif direction > 0.1:
-                expectation = "↗️ Expectation: Mildly positive opening. Market will look for direction in the first hour."
-            elif direction < -0.4:
-                expectation = "📉 Expectation: Heavy Gap-Down opening. Stay in cash and let the market settle."
-            elif direction < -0.1:
-                expectation = "↘️ Expectation: Mildly negative opening. Support levels will be tested early."
-            else:
-                expectation = "⚖️ Expectation: Flat opening expected. Wait for a clear trend to emerge after 10:00 AM."
+            if direction > 0.4: expectation = "📈 Expectation: Strong Gap-Up opening for the Indian market today. Look for profit booking initially."
+            elif direction > 0.1: expectation = "↗️ Expectation: Mildly positive opening. Market will look for direction in the first hour."
+            elif direction < -0.4: expectation = "📉 Expectation: Heavy Gap-Down opening. Stay in cash and let the market settle."
+            elif direction < -0.1: expectation = "↘️ Expectation: Mildly negative opening. Support levels will be tested early."
+            else: expectation = "⚖️ Expectation: Flat opening expected. Wait for a clear trend to emerge after 10:00 AM."
 
             msg += f"<div class='market-expectation'>{expectation}</div>"
-            
             return status, msg, css_class
             
-        # LIVE MARKET: From 9 AM to 12 AM IST (Show Domestic Technicals)
+        # LIVE MARKET: From 9 AM to 12 AM IST (Domestic Technicals)
         else:
             nifty_val, nifty_pct = get_index_data("^NSEI")
             sensex_val, sensex_pct = get_index_data("^BSESN")
             
-            nifty_hist = yf.download("^NSEI", period="3mo", progress=False)
+            # THE BUG FIX: Handling MultiIndex for NIFTY History
+            nifty_hist = yf.download("^NSEI", period="3mo", progress=False, ignore_tz=True)
             if nifty_hist.empty: return "UNKNOWN", "Unable to fetch NIFTY data.", "white"
             
-            close = float(nifty_hist['Close'].iloc[-1])
-            ema20 = nifty_hist['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
-            ema50 = nifty_hist['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
+            if isinstance(nifty_hist.columns, pd.MultiIndex):
+                close_series = nifty_hist['Close']["^NSEI"]
+            else:
+                close_series = nifty_hist['Close']
+                
+            close = float(close_series.iloc[-1])
+            ema20 = close_series.ewm(span=20, adjust=False).mean().iloc[-1]
+            ema50 = close_series.ewm(span=50, adjust=False).mean().iloc[-1]
             
-            idx_str = "<b>Live Indices:</b> "
+            idx_str = "<b>Live Indices (15-Min Delay):</b> "
             idx_str += f"NIFTY: {nifty_val:.0f} ({nifty_pct:+.2f}%) | " if nifty_val else "NIFTY: Data delayed | "
             idx_str += f"SENSEX: {sensex_val:.0f} ({sensex_pct:+.2f}%)" if sensex_val else "SENSEX: Data delayed"
             
@@ -157,7 +148,7 @@ with st.sidebar:
     if st.button("🔄 Force Live Data Sync", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-    st.caption(f"Last Sync: {datetime.datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Last Sync: {datetime.datetime.now().strftime('%H:%M:%S')} (Data refreshes every 5 mins)")
 
 st.markdown("<h1 style='text-align: center; font-size: 40px; color: #00FF88; margin-bottom: 5px;'>💎 Titan Quantum Pro</h1>", unsafe_allow_html=True)
 
@@ -217,7 +208,6 @@ with tabs[0]:
         if search_q != "ALL": filtered_df = filtered_df[filtered_df['SYMBOL'] == search_q]
         if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'] == '💎 ALPHA']
         
-        # --- TOP 3 SECTORS ---
         st.markdown("---")
         st.subheader("🏢 Top Performing Industries")
         sec_df = inst_df.groupby('SECTOR')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False)
@@ -228,12 +218,14 @@ with tabs[0]:
             with st.expander(f"🏆 {r['SECTOR']} (Avg Score: {r['SCORE']:.1f}/100)"):
                 sec_stocks = inst_df[(inst_df['SECTOR'] == r['SECTOR']) & (inst_df['VERDICT'] != '🔴 AVOID')].sort_values('SCORE', ascending=False).head(3)
                 if not sec_stocks.empty:
-                    render_df_with_progress(sec_stocks, ['SYMBOL', 'VERDICT', 'SCORE', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%'])
+                    # Added EST_PERIOD
+                    render_df_with_progress(sec_stocks, ['SYMBOL', 'VERDICT', 'SCORE', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%'])
                 else: st.write("No safe setups found in this sector today.")
         
         st.markdown("---")
         st.subheader(f"📋 Master Screener ({len(filtered_df)})")
-        disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
+        # Added EST_PERIOD
+        disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
         render_df_with_progress(filtered_df, disp_cols)
 
         st.divider()
@@ -266,7 +258,8 @@ with tabs[1]:
     if not df.empty:
         breakouts = df[df['PATTERN'] == '⚡ Pre-Breakout Squeeze']
         if not breakouts.empty:
-            render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
+            # Added EST_PERIOD
+            render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'EST_PERIOD', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
             
             st.markdown("---")
             st.markdown("### 🎯 High-Conviction Actionables (The 2:00 PM Strategy)")
@@ -279,7 +272,7 @@ with tabs[1]:
                     <b>{b['SYMBOL']}</b> | Crosses Resistance at <b>₹{b['RESISTANCE']:.2f}</b><br>
                     <i>Why:</i> Institutional momentum score is {b['SCORE']}/100. Upside potential is {b['UPSIDE_%']:.1f}%.<br>
                     <i>Status:</i> {vol_text}.<br>
-                    <b>ACTION PLAN:</b> Look at this stock at 2:00 PM. If the CMP is higher than ₹{b['RESISTANCE']:.2f}, execute a Swing Buy. Hold for days until target hits.
+                    <b>ACTION PLAN:</b> Look at this stock at 2:00 PM. If the CMP is higher than ₹{b['RESISTANCE']:.2f}, execute a Swing Buy. Hold for {b['EST_PERIOD']} until target hits.
                 </div>
                 """, unsafe_allow_html=True)
         else:
@@ -395,9 +388,10 @@ with tabs[3]:
         
         if not alpha_gems.empty:
             for _, g in alpha_gems.iterrows():
+                # Added EST_PERIOD to the UI card
                 st.markdown(f"""
                 <div class="gem-card">
-                    <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span></h3>
+                    <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100 | Hold: {g['EST_PERIOD']}</span></h3>
                     <div style="display:flex; justify-content:space-between;">
                         <p><b>CMP:</b> ₹{g['PRICE']:.2f}</p>
                         <p style="color:#00FF88;"><b>Target:</b> ₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
@@ -418,7 +412,8 @@ with tabs[4]:
         penny_df = df[df['CAP_CATEGORY'] == "Small/Penny Cap"]
         
         if not penny_df.empty:
-            render_df_with_progress(penny_df, ['VERDICT', 'SCORE', 'SYMBOL', 'PATTERN', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL'])
+            # Added EST_PERIOD
+            render_df_with_progress(penny_df, ['VERDICT', 'SCORE', 'SYMBOL', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL'])
             
             st.markdown("---")
             st.markdown("### ⚠️ Operator Alert (Actionables)")
