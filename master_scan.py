@@ -34,154 +34,163 @@ if __name__ == "__main__":
         master['Clean_Sym'] = master['SYMBOL'].astype(str).str.strip() + '.NS'
         sector_map = dict(zip(master['Clean_Sym'], master[sector_col].fillna("Unknown")))
 
-    # UPGRADE: 1y data to allow for Weekly Timeframe (MTFA) calculations
-    print(f"🚀 Downloading 1 year of data for {len(symbols)} stocks in ONE massive request...")
-    data = yf.download(symbols, period="1y", group_by="ticker", threads=True, ignore_tz=True)
-
-    print(f"✅ Download complete! Processing technical indicators locally in RAM...")
-
     results = []
     success_count = 0
     BATCH_SIZE = 100
+    CHUNK_SIZE = 300 # Added Chunking to prevent Yahoo Finance IP bans
 
-    # 3. Process Locally
-    for t in symbols:
-        try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if t not in data.columns.get_level_values(0).unique():
-                    print(f"⚠️ SKIPPED {t}: Ticker not found on Yahoo Finance.")
+    print(f"🚀 Downloading 1 year of data for {len(symbols)} stocks in chunks...")
+
+    # THE CHUNKING FIX: Loop through symbols 300 at a time
+    for i in range(0, len(symbols), CHUNK_SIZE):
+        chunk = symbols[i:i+CHUNK_SIZE]
+        print(f"\n📥 Fetching Batch {i+1} to {min(i+CHUNK_SIZE, len(symbols))}...")
+        
+        # UPGRADE: 1y data to allow for Weekly Timeframe (MTFA) calculations
+        data = yf.download(chunk, period="1y", group_by="ticker", threads=True, ignore_tz=True, show_errors=False)
+        
+        # Give Yahoo a 1-second breather to clear anti-bot limits
+        time.sleep(1)
+
+        # 3. Process Locally for the current chunk
+        for t in chunk:
+            try:
+                if len(chunk) > 1 and isinstance(data.columns, pd.MultiIndex):
+                    if t not in data.columns.get_level_values(0).unique():
+                        print(f"⚠️ SKIPPED {t}: Ticker not found on Yahoo Finance.")
+                        continue
+                    df = data[t].copy()
+                else:
+                    df = data.copy()
+
+                df.dropna(inplace=True)
+
+                # X-RAY VISION: Log why stocks are skipped
+                if df.empty:
+                    print(f"⚠️ SKIPPED {t}: Zero trading data returned.")
                     continue
-                df = data[t].copy()
-            else:
-                df = data.copy()
 
-            df.dropna(inplace=True)
+                # UPGRADE: Need at least 100 days of data to calculate a 20-Week EMA safely
+                if len(df) < 100:
+                    print(f"⚠️ SKIPPED {t}: Only {len(df)} days of data (< 100 required for MTFA).")
+                    continue
 
-            # X-RAY VISION: Log why stocks are skipped
-            if df.empty:
-                print(f"⚠️ SKIPPED {t}: Zero trading data returned.")
+                curr_p = safe_float(df['Close'].iloc[-1])
+                if curr_p == 0: 
+                    print(f"⚠️ SKIPPED {t}: Last traded price is zero (Suspended).")
+                    continue
+
+                # --- UPGRADE: MTFA (Multi-Timeframe Alignment) ---
+                # Compress daily data into Weekly data
+                df_w = df.resample('W-FRI').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+                df_w.ta.ema(length=20, append=True)
+                weekly_ema20 = safe_float(df_w['EMA_20'].iloc[-1] if 'EMA_20' in df_w else 0)
+                
+                # Check if the macro trend is safe
+                weekly_trend = "Bullish" if curr_p > weekly_ema20 and weekly_ema20 > 0 else "Bearish"
+
+                # --- PRESERVED: Your Exact Technical Math ---
+                res_20 = safe_float(df['High'].rolling(20).max().iloc[-1])
+                sup_20 = safe_float(df['Low'].rolling(20).min().iloc[-1])
+                open_tdy, close_tdy = safe_float(df['Open'].iloc[-1]), safe_float(df['Close'].iloc[-1])
+                open_yst, close_yst = safe_float(df['Open'].iloc[-2]), safe_float(df['Close'].iloc[-2])
+
+                df.ta.ema(length=20, append=True)
+                df.ta.ema(length=50, append=True)
+                df.ta.rsi(length=14, append=True)
+                df.ta.bbands(length=20, append=True) 
+                df.ta.atr(length=14, append=True)
+                df.ta.macd(fast=12, slow=26, signal=9, append=True) 
+
+                df['Vol_20_MA'] = df['Volume'].rolling(window=20).mean()
+                avg_vol = safe_float(df['Vol_20_MA'].iloc[-1])
+                current_vol = safe_float(df['Volume'].iloc[-1])
+                rvol = current_vol / avg_vol if avg_vol > 0 else 0
+
+                ema20 = safe_float(df['EMA_20'].iloc[-1] if 'EMA_20' in df else 0)
+                ema50 = safe_float(df['EMA_50'].iloc[-1] if 'EMA_50' in df else 0)
+                rsi = safe_float(df['RSI_14'].iloc[-1] if 'RSI_14' in df else 0)
+                atr = safe_float(df['ATRr_14'].iloc[-1] if 'ATRr_14' in df else 0)
+                macd_hist = safe_float(df['MACDh_12_26_9'].iloc[-1] if 'MACDh_12_26_9' in df else 0)
+                macd_hist_prev = safe_float(df['MACDh_12_26_9'].iloc[-2] if 'MACDh_12_26_9' in df else 0)
+
+                bb_width = 100 
+                if 'BBU_20_2.0' in df and 'BBL_20_2.0' in df:
+                    bb_upper = safe_float(df['BBU_20_2.0'].iloc[-1])
+                    bb_lower = safe_float(df['BBL_20_2.0'].iloc[-1])
+                    bb_width = (bb_upper - bb_lower) / curr_p * 100 
+
+                # --- PRESERVED: Your Pattern Fix ---
+                pattern = "Uptrending" if curr_p > ema20 else "Consolidating"
+                is_bull_engulf = (close_yst < open_yst) and (open_tdy < close_yst) and (close_tdy > open_yst)
+                if is_bull_engulf: pattern = "🟢 Bullish Engulfing"
+                
+                vol_dry_up = False
+                if len(df) > 5:
+                    last_3_vol_avg = df['Volume'].iloc[-4:-1].mean()
+                    if last_3_vol_avg < avg_vol and rvol > 1.5: vol_dry_up = True
+
+                is_pre_breakout = False
+                if bb_width < 6.0 and ((res_20 - curr_p) / curr_p) < 0.03 and macd_hist > macd_hist_prev:
+                    is_pre_breakout = True
+                    pattern = "⚡ Pre-Breakout Squeeze"
+
+                # --- Core Algorithm Score ---
+                score = 0
+                if ema20 > 0 and curr_p > ema20: score += 10
+                if ema50 > 0 and ema20 > ema50: score += 10
+                if 55 <= rsi <= 70: score += 10 
+                if vol_dry_up: score += 20 
+                elif rvol > 1.5: score += 10
+                if is_pre_breakout: score += 30 
+                elif bb_width < 5.0: score += 15 
+                if is_bull_engulf: score += 20 
+
+                # MTFA Institutional Trend Score
+                if weekly_trend == "Bullish": score += 20
+
+                # --- UPGRADE: The "Suzlon Fix" (Liquidity Filter) ---
+                turnover = avg_vol * curr_p
+                # Penalize strictly if turnover is less than ₹2 Crores daily (Illiquid/Manipulation risk)
+                if turnover < 20000000: 
+                    score -= 30 
+
+                # --- PRESERVED: Risk/Reward Fix ---
+                target_price = curr_p + (3 * atr)
+                stop_loss_price = curr_p - (2 * atr)
+                rr_ratio = ((target_price - curr_p) / (curr_p - stop_loss_price)) if (curr_p - stop_loss_price) > 0 else 0
+                if rr_ratio > 10: rr_ratio = 10.0 
+
+                results.append({
+                    "SYMBOL": t.replace(".NS", ""),
+                    "PRICE": round(curr_p, 2),
+                    "SCORE": max(0, min(100, score)), 
+                    "RSI": round(rsi, 2),
+                    "RVOL": round(rvol, 2),
+                    "TARGET": round(target_price, 2) if atr > 0 else 0,
+                    "STOP_LOSS": round(stop_loss_price, 2) if atr > 0 else 0,
+                    "RR_RATIO": round(rr_ratio, 2),
+                    "SUPPORT": round(sup_20, 2),
+                    "RESISTANCE": round(res_20, 2),
+                    "PATTERN": pattern,
+                    "EARNINGS_RISK": "✅ Clear",
+                    "SECTOR": str(sector_map.get(t, "Unknown")),
+                    "INSTITUTIONAL_TREND": weekly_trend,
+                    # UPGRADE: Categories are now based on actual liquidity, not arbitrary price
+                    "CAP_CATEGORY": "Large/Mid Cap" if turnover >= 20000000 else "Small/Penny Cap",
+                    "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
+                })
+                success_count += 1
+
+                if len(results) >= BATCH_SIZE:
+                    supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
+                    print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Validated: {success_count}")
+                    results = [] 
+
+            except Exception as e:
+                # X-RAY VISION: Catch the exact math error breaking the stock
+                print(f"❌ CRASH ON {t}: {str(e)}")
                 continue
-
-            if len(df) < 100:
-                print(f"⚠️ SKIPPED {t}: Only {len(df)} days of data (< 100 required for MTFA).")
-                continue
-
-            curr_p = safe_float(df['Close'].iloc[-1])
-            if curr_p == 0: 
-                print(f"⚠️ SKIPPED {t}: Last traded price is zero (Suspended).")
-                continue
-
-            # --- UPGRADE: MTFA (Multi-Timeframe Alignment) ---
-            # Compress daily data into Weekly data
-            df_w = df.resample('W-FRI').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
-            df_w.ta.ema(length=20, append=True)
-            weekly_ema20 = safe_float(df_w['EMA_20'].iloc[-1] if 'EMA_20' in df_w else 0)
-            
-            # Check if the macro trend is safe
-            weekly_trend = "Bullish" if curr_p > weekly_ema20 and weekly_ema20 > 0 else "Bearish"
-
-            # --- PRESERVED: Your Exact Technical Math ---
-            res_20 = safe_float(df['High'].rolling(20).max().iloc[-1])
-            sup_20 = safe_float(df['Low'].rolling(20).min().iloc[-1])
-            open_tdy, close_tdy = safe_float(df['Open'].iloc[-1]), safe_float(df['Close'].iloc[-1])
-            open_yst, close_yst = safe_float(df['Open'].iloc[-2]), safe_float(df['Close'].iloc[-2])
-
-            df.ta.ema(length=20, append=True)
-            df.ta.ema(length=50, append=True)
-            df.ta.rsi(length=14, append=True)
-            df.ta.bbands(length=20, append=True) 
-            df.ta.atr(length=14, append=True)
-            df.ta.macd(fast=12, slow=26, signal=9, append=True) 
-
-            df['Vol_20_MA'] = df['Volume'].rolling(window=20).mean()
-            avg_vol = safe_float(df['Vol_20_MA'].iloc[-1])
-            current_vol = safe_float(df['Volume'].iloc[-1])
-            rvol = current_vol / avg_vol if avg_vol > 0 else 0
-
-            ema20 = safe_float(df['EMA_20'].iloc[-1] if 'EMA_20' in df else 0)
-            ema50 = safe_float(df['EMA_50'].iloc[-1] if 'EMA_50' in df else 0)
-            rsi = safe_float(df['RSI_14'].iloc[-1] if 'RSI_14' in df else 0)
-            atr = safe_float(df['ATRr_14'].iloc[-1] if 'ATRr_14' in df else 0)
-            macd_hist = safe_float(df['MACDh_12_26_9'].iloc[-1] if 'MACDh_12_26_9' in df else 0)
-            macd_hist_prev = safe_float(df['MACDh_12_26_9'].iloc[-2] if 'MACDh_12_26_9' in df else 0)
-
-            bb_width = 100 
-            if 'BBU_20_2.0' in df and 'BBL_20_2.0' in df:
-                bb_upper = safe_float(df['BBU_20_2.0'].iloc[-1])
-                bb_lower = safe_float(df['BBL_20_2.0'].iloc[-1])
-                bb_width = (bb_upper - bb_lower) / curr_p * 100 
-
-            # --- PRESERVED: Your Pattern Fix ---
-            pattern = "Uptrending" if curr_p > ema20 else "Consolidating"
-            is_bull_engulf = (close_yst < open_yst) and (open_tdy < close_yst) and (close_tdy > open_yst)
-            if is_bull_engulf: pattern = "🟢 Bullish Engulfing"
-            
-            vol_dry_up = False
-            if len(df) > 5:
-                last_3_vol_avg = df['Volume'].iloc[-4:-1].mean()
-                if last_3_vol_avg < avg_vol and rvol > 1.5: vol_dry_up = True
-
-            is_pre_breakout = False
-            if bb_width < 6.0 and ((res_20 - curr_p) / curr_p) < 0.03 and macd_hist > macd_hist_prev:
-                is_pre_breakout = True
-                pattern = "⚡ Pre-Breakout Squeeze"
-
-            # --- Core Algorithm Score ---
-            score = 0
-            if ema20 > 0 and curr_p > ema20: score += 10
-            if ema50 > 0 and ema20 > ema50: score += 10
-            if 55 <= rsi <= 70: score += 10 
-            if vol_dry_up: score += 20 
-            elif rvol > 1.5: score += 10
-            if is_pre_breakout: score += 30 
-            elif bb_width < 5.0: score += 15 
-            if is_bull_engulf: score += 20 
-
-            # MTFA Institutional Trend Score
-            if weekly_trend == "Bullish": score += 20
-
-            # --- UPGRADE: The "Suzlon Fix" (Liquidity Filter) ---
-            turnover = avg_vol * curr_p
-            # Penalize strictly if turnover is less than ₹2 Crores daily (Illiquid/Manipulation risk)
-            if turnover < 20000000: 
-                score -= 30 
-
-            # --- PRESERVED: Risk/Reward Fix ---
-            target_price = curr_p + (3 * atr)
-            stop_loss_price = curr_p - (2 * atr)
-            rr_ratio = ((target_price - curr_p) / (curr_p - stop_loss_price)) if (curr_p - stop_loss_price) > 0 else 0
-            if rr_ratio > 10: rr_ratio = 10.0 
-
-            results.append({
-                "SYMBOL": t.replace(".NS", ""),
-                "PRICE": round(curr_p, 2),
-                "SCORE": max(0, min(100, score)), 
-                "RSI": round(rsi, 2),
-                "RVOL": round(rvol, 2),
-                "TARGET": round(target_price, 2) if atr > 0 else 0,
-                "STOP_LOSS": round(stop_loss_price, 2) if atr > 0 else 0,
-                "RR_RATIO": round(rr_ratio, 2),
-                "SUPPORT": round(sup_20, 2),
-                "RESISTANCE": round(res_20, 2),
-                "PATTERN": pattern,
-                "EARNINGS_RISK": "✅ Clear",
-                "SECTOR": str(sector_map.get(t, "Unknown")),
-                "INSTITUTIONAL_TREND": weekly_trend,
-                # UPGRADE: Categories are now based on actual liquidity, not arbitrary price
-                "CAP_CATEGORY": "Large/Mid Cap" if turnover >= 20000000 else "Small/Penny Cap",
-                "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
-            })
-            success_count += 1
-
-            if len(results) >= BATCH_SIZE:
-                supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
-                print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Validated: {success_count}")
-                results = [] 
-
-        except Exception as e:
-            # X-RAY VISION: Catch the exact math error breaking the stock
-            print(f"❌ CRASH ON {t}: {str(e)}")
-            continue
 
     if results: 
         supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
