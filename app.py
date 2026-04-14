@@ -434,11 +434,30 @@ with tabs[4]:
             st.info("No Penny Stocks processed in the database currently.")
 
 # ==========================================
-# TAB 6: HISTORY
+# TAB 6: HISTORY (Advanced Analytics)
 # ==========================================
 with tabs[5]:
-    st.subheader("🏆 History")
+    st.subheader("🏆 Institutional Performance Analytics")
     if not hist_df.empty:
+        # --- CALCULATE METRICS ---
+        total_trades = len(hist_df)
+        wins = hist_df[hist_df['realized_pl'] > 0]
+        losses = hist_df[hist_df['realized_pl'] <= 0]
+        
+        win_rate = (len(wins) / total_trades) * 100
+        avg_win = wins['pl_percentage'].mean() if not wins.empty else 0
+        avg_loss = losses['pl_percentage'].mean() if not losses.empty else 0
+        profit_factor = abs(wins['realized_pl'].sum() / losses['realized_pl'].sum()) if not losses.empty else 10.0
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Win Rate", f"{win_rate:.1f}%")
+        c2.metric("Avg Win", f"{avg_win:+.1f}%")
+        c3.metric("Avg Loss", f"{avg_loss:.1f}%")
+        c4.metric("Profit Factor", f"{profit_factor:.2f}")
+
+        st.markdown("---")
         st.dataframe(hist_df.style.format({
             "sell_price": "{:.2f}", "buy_price": "{:.2f}", "realized_pl": "{:.2f}", "pl_percentage": "{:.2f}%"
         }), use_container_width=True, hide_index=True)
+    else:
+        st.info("No trade history available yet.")
