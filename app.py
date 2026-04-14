@@ -287,9 +287,18 @@ with tabs[2]:
         port_calc = []
         for _, row in port_df.iterrows():
             sym = row['symbol']
-            live_data = df[df['SYMBOL'] == sym]
+            
+            # THE FIX: Safely check if the market data actually exists before searching it
+            if not df.empty and 'SYMBOL' in df.columns:
+                live_data = df[df['SYMBOL'] == sym]
+            else:
+                live_data = pd.DataFrame() # Create a blank dataframe so the app doesn't crash
+                
             cmp = float(live_data.iloc[0]['PRICE']) if not live_data.empty else float(row['entry_price'])
             target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
+            
+            entry = float(row['entry_price'])
+            original_sl = float(live_data.iloc[0]['STOP_LOSS']) if not live_data.empty else 0.0
             
             entry = float(row['entry_price'])
             original_sl = float(live_data.iloc[0]['STOP_LOSS']) if not live_data.empty else 0.0
