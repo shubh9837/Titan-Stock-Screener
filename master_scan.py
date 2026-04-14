@@ -46,8 +46,8 @@ if __name__ == "__main__":
         chunk = symbols[i:i+CHUNK_SIZE]
         print(f"\n📥 Fetching Batch {i+1} to {min(i+CHUNK_SIZE, len(symbols))}...")
         
-        # UPGRADE: 1y data to allow for Weekly Timeframe (MTFA) calculations
-        data = yf.download(chunk, period="1y", group_by="ticker", threads=True, ignore_tz=True, show_errors=False)
+        # FIXED: Removed the unsupported 'show_errors=False' parameter
+        data = yf.download(chunk, period="1y", group_by="ticker", threads=True, ignore_tz=True)
         
         # Give Yahoo a 1-second breather to clear anti-bot limits
         time.sleep(1)
