@@ -15,7 +15,7 @@ def safe_float(val, default=0.0):
     return float(val)
 
 if __name__ == "__main__":
-    print("Initiating Yahoo Bulk API Data Stream...")
+    print("Initiating Yahoo Chunked API Data Stream...")
 
     # 1. Load targets & map sectors directly from CSV
     master = pd.read_csv("Tickers.csv")
@@ -34,12 +34,12 @@ if __name__ == "__main__":
         master['Clean_Sym'] = master['SYMBOL'].astype(str).str.strip() + '.NS'
         sector_map = dict(zip(master['Clean_Sym'], master[sector_col].fillna("Unknown")))
 
-    results = []
+    all_results = []
     success_count = 0
     BATCH_SIZE = 100
     CHUNK_SIZE = 300 # Added Chunking to prevent Yahoo Finance IP bans
 
-    print(f"🚀 Downloading 1 year of data for {len(symbols)} stocks in chunks...")
+    print(f"🚀 Phase 1: Downloading & Analyzing Technicals for {len(symbols)} stocks...")
 
     # THE CHUNKING FIX: Loop through symbols 300 at a time
     for i in range(0, len(symbols), CHUNK_SIZE):
@@ -155,44 +155,109 @@ if __name__ == "__main__":
                 if turnover < 20000000: 
                     score -= 30 
 
-                # --- PRESERVED: Risk/Reward Fix ---
-                target_price = curr_p + (3 * atr)
-                stop_loss_price = curr_p - (2 * atr)
-                rr_ratio = ((target_price - curr_p) / (curr_p - stop_loss_price)) if (curr_p - stop_loss_price) > 0 else 0
-                if rr_ratio > 10: rr_ratio = 10.0 
-
-                results.append({
+                # Temporarily store everything in all_results without pushing yet
+                all_results.append({
                     "SYMBOL": t.replace(".NS", ""),
                     "PRICE": round(curr_p, 2),
                     "SCORE": max(0, min(100, score)), 
                     "RSI": round(rsi, 2),
                     "RVOL": round(rvol, 2),
-                    "TARGET": round(target_price, 2) if atr > 0 else 0,
-                    "STOP_LOSS": round(stop_loss_price, 2) if atr > 0 else 0,
-                    "RR_RATIO": round(rr_ratio, 2),
+                    "ATR": atr, # Temporarily save ATR to calculate dynamic target later
                     "SUPPORT": round(sup_20, 2),
                     "RESISTANCE": round(res_20, 2),
                     "PATTERN": pattern,
-                    "EARNINGS_RISK": "✅ Clear",
+                    "EARNINGS_RISK": "✅ Clear", # Kept to maintain your exact database structure
                     "SECTOR": str(sector_map.get(t, "Unknown")),
                     "INSTITUTIONAL_TREND": weekly_trend,
-                    # UPGRADE: Categories are now based on actual liquidity, not arbitrary price
                     "CAP_CATEGORY": "Large/Mid Cap" if turnover >= 20000000 else "Small/Penny Cap",
                     "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
                 })
                 success_count += 1
-
-                if len(results) >= BATCH_SIZE:
-                    supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
-                    print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Validated: {success_count}")
-                    results = [] 
 
             except Exception as e:
                 # X-RAY VISION: Catch the exact math error breaking the stock
                 print(f"❌ CRASH ON {t}: {str(e)}")
                 continue
 
-    if results: 
-        supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
+    # --- PHASE 2: VIP FUNDAMENTAL EXTRACTION ---
+    print(f"\n✅ Phase 1 Complete. {success_count} stocks technically analyzed.")
+    print("🔍 Phase 2: Identifying VIP Stocks & Fetching Fundamentals...")
+    
+    df_res = pd.DataFrame(all_results)
+    vip_symbols = set()
+    
+    if not df_res.empty:
+        # Find the absolute best setups to fetch fundamentals for
+        vip_symbols.update(df_res[df_res['CAP_CATEGORY'] == 'Large/Mid Cap'].nlargest(15, 'SCORE')['SYMBOL'])
+        vip_symbols.update(df_res[df_res['CAP_CATEGORY'] == 'Small/Penny Cap'].nlargest(15, 'SCORE')['SYMBOL'])
+        vip_symbols.update(df_res[df_res['PATTERN'] == '⚡ Pre-Breakout Squeeze'].nlargest(15, 'SCORE')['SYMBOL'])
+    
+    funda_data = {}
+    print(f"Fetching Deep Fundamentals for {len(vip_symbols)} VIP setups...")
+    
+    for sym in vip_symbols:
+        try:
+            info = yf.Ticker(f"{sym}.NS").info
+            funda_data[sym] = {
+                "PE_RATIO": safe_float(info.get('trailingPE', 0)),
+                "DEBT_EQUITY": safe_float(info.get('debtToEquity', 0)),
+                "ROE": safe_float(info.get('returnOnEquity', 0)) * 100
+            }
+        except:
+            funda_data[sym] = {"PE_RATIO": 0.0, "DEBT_EQUITY": 0.0, "ROE": 0.0}
 
-    print(f"✅ Full Bulk Stream Complete. Validated: {success_count} stocks.")
+    # --- PHASE 3: THE VERDICT LOGIC & DYNAMIC TARGETS ---
+    final_payload = []
+    
+    for r in all_results:
+        sym = r['SYMBOL']
+        score = r['SCORE']
+        curr_p = r['PRICE']
+        atr = r.pop('ATR') # Extract ATR for the final math
+        
+        # Assign Fundamentals (Defaults to 0 if not a VIP stock)
+        pe, de, roe = 0.0, 0.0, 0.0
+        if sym in funda_data:
+            pe = funda_data[sym]['PE_RATIO']
+            de = funda_data[sym]['DEBT_EQUITY']
+            roe = funda_data[sym]['ROE']
+            
+        r['PE_RATIO'] = round(pe, 2)
+        r['DEBT_EQUITY'] = round(de, 2)
+        r['ROE'] = round(roe, 2)
+
+        # 🧠 THE VERDICT ENGINE
+        stop_loss_price = curr_p - (2 * atr)
+        
+        if score >= 70 and roe >= 15.0 and de < 100.0 and de > 0:
+            verdict = "💎 High Conviction (Hold 15-45 Days)"
+            target_price = curr_p + (4 * atr) # 1:2 Risk/Reward
+        elif score >= 70 and (de > 200.0 or roe < 0):
+            verdict = "⚠️ High Risk Trap (Hit & Run 1-5 Days)"
+            target_price = curr_p + (2 * atr) # 1:1 Risk/Reward
+        elif score >= 50:
+            verdict = "⚡ Tech Momentum (Hold 5-15 Days)"
+            target_price = curr_p + (3 * atr) # 1:1.5 Risk/Reward
+        else:
+            verdict = "⏳ Weak Setup (Ignore)"
+            target_price = curr_p + (3 * atr)
+
+        r['VERDICT'] = verdict
+        r['TARGET'] = round(target_price, 2) if atr > 0 else 0
+        r['STOP_LOSS'] = round(stop_loss_price, 2) if atr > 0 else 0
+        
+        rr_ratio = ((target_price - curr_p) / (curr_p - stop_loss_price)) if (curr_p - stop_loss_price) > 0 else 0
+        r['RR_RATIO'] = round(min(rr_ratio, 10.0), 2)
+        
+        final_payload.append(r)
+
+    # --- PHASE 4: PUSH TO DATABASE ---
+    print("\n📦 Phase 3: Pushing analyzed data to Supabase...")
+    pushed = 0
+    for i in range(0, len(final_payload), BATCH_SIZE):
+        batch = final_payload[i:i+BATCH_SIZE]
+        supabase.table('market_scans').upsert(batch, on_conflict="SYMBOL").execute()
+        pushed += len(batch)
+        print(f"📦 [STREAM] Scanned & Pushed a batch of {len(batch)}. Total Validated: {pushed}")
+
+    print(f"✅ Full System Upgrade Complete. {pushed} stocks successfully processed with Techno-Funda metrics.")
