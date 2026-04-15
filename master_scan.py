@@ -1,3 +1,4 @@
+import pandas as pd
 import numpy as np
 import pandas_ta_classic as ta
 import yfinance as yf
