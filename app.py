@@ -1,3 +1,4 @@
+import streamlit as st
 import pandas as pd
 from supabase import create_client
 import datetime
