@@ -16,6 +16,7 @@ st.markdown("""
     .main { background-color: #0E1117; color: #FAFAFA;}
     div[data-testid="stMetric"] { background-color: #1A1C24; border: 1px solid #2D313A; border-radius: 12px; padding: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     .gem-card { background: linear-gradient(145deg, #1A1C24, #12141A); border: 1px solid #2D313A; border-radius: 12px; padding: 20px; margin-bottom: 15px;}
+    .funda-bar { display:flex; justify-content:space-between; font-size:13px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; margin-bottom: 15px; border-left: 3px solid #00B8FF;}
     .action-card { background: #1A1C24; border-left: 4px solid #00B8FF; padding: 15px; border-radius: 8px; margin-top: 10px; margin-bottom: 10px;}
     .info-box { background: rgba(0, 184, 255, 0.1); border-left: 4px solid #00B8FF; padding: 15px; border-radius: 8px; margin-top: 20px; font-size: 14px;}
     .weather-green { background: rgba(0, 255, 136, 0.1); border: 1px solid #00FF88; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
@@ -33,7 +34,7 @@ def init_connection():
 
 supabase = init_connection()
 
-@st.cache_data(ttl=300) # Caches data for 5 minutes. Refresh page to pull live CMPs from Supabase
+@st.cache_data(ttl=300) 
 def load_market_data():
     all_data, limit, offset = [], 1000, 0
     while True:
@@ -46,15 +47,19 @@ def load_market_data():
     df = pd.DataFrame(all_data)
     if df.empty: return df
     
-    expected_cols = ['SECTOR', 'EARNINGS_RISK', 'CAP_CATEGORY', 'SUPPORT', 'RESISTANCE', 'PATTERN', 'RR_RATIO', 'RVOL']
+    # UPGRADED: Added Fundamental Columns to Expected Columns to prevent crashes
+    expected_cols = ['SECTOR', 'EARNINGS_RISK', 'CAP_CATEGORY', 'SUPPORT', 'RESISTANCE', 'PATTERN', 'RR_RATIO', 'RVOL', 'VERDICT', 'PE_RATIO', 'DEBT_EQUITY', 'ROE']
     for col in expected_cols:
         if col not in df.columns: 
-            if col == 'RVOL': df[col] = 0.0
+            if col in ['RVOL', 'PE_RATIO', 'DEBT_EQUITY', 'ROE']: df[col] = 0.0
             else: df[col] = "N/A" if "RISK" in col or "PATTERN" in col else "Unknown" if "SECTOR" in col else 0
             
     df['UPSIDE_%'] = ((df['TARGET'] - df['PRICE']) / df['PRICE'] * 100)
-    df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD" if x >= 40 else "🔴 AVOID")
-    # Generating the EST_PERIOD here
+    
+    # PRESERVED: Legacy calculations fallback if database isn't fully updated yet
+    if 'VERDICT' not in df.columns or df['VERDICT'].isnull().all():
+        df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD" if x >= 40 else "🔴 AVOID")
+    
     df['EST_PERIOD'] = df['SCORE'].apply(lambda x: "5-14 Days" if x >= 85 else "15-30 Days" if x >= 65 else "30-45 Days")
     return df
 
@@ -76,11 +81,11 @@ def get_macro_weather():
         ist = pytz.timezone('Asia/Kolkata')
         now_ist = datetime.datetime.now(ist)
         
-        # PRE-MARKET: From 12 AM to 9 AM IST (Global Cues)
+        # PRE-MARKET
         if now_ist.hour < 9:
             gift, gift_pct = get_index_data("GIFNIF.NS") 
-            sp500, sp_pct = get_index_data("^GSPC")      
-            nikkei, nik_pct = get_index_data("^N225")    
+            sp500, sp_pct = get_index_data("^GSPC")     
+            nikkei, nik_pct = get_index_data("^N225")   
             
             if gift_pct is not None: direction = gift_pct
             elif sp_pct is not None: direction = sp_pct
@@ -103,12 +108,11 @@ def get_macro_weather():
             msg += f"<div class='market-expectation'>{expectation}</div>"
             return status, msg, css_class
             
-        # LIVE MARKET: From 9 AM to 12 AM IST (Domestic Technicals)
+        # LIVE MARKET
         else:
             nifty_val, nifty_pct = get_index_data("^NSEI")
             sensex_val, sensex_pct = get_index_data("^BSESN")
             
-            # THE BUG FIX: Handling MultiIndex for NIFTY History
             nifty_hist = yf.download("^NSEI", period="3mo", progress=False, ignore_tz=True)
             if nifty_hist.empty: return "UNKNOWN", "Unable to fetch NIFTY data.", "white"
             
@@ -167,7 +171,6 @@ if not df.empty and 'UPDATED_AT' in df.columns:
         latest_update = pd.to_datetime(df['UPDATED_AT'].max())
         now_utc = datetime.datetime.utcnow()
         delta_hours = (now_utc - latest_update).total_seconds() / 3600
-        is_market_hours = now_utc.weekday() < 5 and (4 <= now_utc.hour <= 10)
         if delta_hours > 24 and now_utc.weekday() < 5:
             st.error(f"🔴 CRITICAL ALARM: The Master EOD Scan failed to update! Data is {int(delta_hours)} hours old.", icon="🚨")
     except: pass
@@ -176,6 +179,7 @@ if not df.empty and 'UPDATED_AT' in df.columns:
 tabs = st.tabs(["📊 Market Screener", "🎯 Breakout Watchlist", "💼 Portfolio", "🚀 Swing Gems", "🎰 Penny Sandbox", "🏆 History"])
 
 def render_df_with_progress(data, cols_to_show):
+    # UPGRADED: Added Fundamental formatting configurations
     st.dataframe(
         data[cols_to_show].sort_values("SCORE", ascending=False),
         column_config={
@@ -187,6 +191,9 @@ def render_df_with_progress(data, cols_to_show):
             "SUPPORT": st.column_config.NumberColumn("Support", format="%.2f"),
             "RESISTANCE": st.column_config.NumberColumn("Resistance", format="%.2f"),
             "RVOL": st.column_config.NumberColumn("Vol Spike", format="%.1fx"),
+            "PE_RATIO": st.column_config.NumberColumn("P/E Ratio", format="%.1f"),
+            "DEBT_EQUITY": st.column_config.NumberColumn("Debt/Eq", format="%.2f"),
+            "ROE": st.column_config.NumberColumn("ROE", format="%.1f%%"),
         },
         use_container_width=True, hide_index=True
     )
@@ -206,7 +213,9 @@ with tabs[0]:
         
         filtered_df = inst_df[(inst_df['SCORE'] >= min_score) & (inst_df['UPSIDE_%'] >= min_upside)]
         if search_q != "ALL": filtered_df = filtered_df[filtered_df['SYMBOL'] == search_q]
-        if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'] == '💎 ALPHA']
+        
+        # UPGRADED: Filter strictly matches the new database string
+        if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'].str.contains('💎', na=False)]
         
         st.markdown("---")
         st.subheader("🏢 Top Performing Industries")
@@ -216,16 +225,16 @@ with tabs[0]:
         top_3 = sec_df.head(3)
         for _, r in top_3.iterrows():
             with st.expander(f"🏆 {r['SECTOR']} (Avg Score: {r['SCORE']:.1f}/100)"):
-                sec_stocks = inst_df[(inst_df['SECTOR'] == r['SECTOR']) & (inst_df['VERDICT'] != '🔴 AVOID')].sort_values('SCORE', ascending=False).head(3)
+                sec_stocks = inst_df[(inst_df['SECTOR'] == r['SECTOR']) & (~inst_df['VERDICT'].str.contains('AVOID', na=False))].sort_values('SCORE', ascending=False).head(3)
                 if not sec_stocks.empty:
-                    # Added EST_PERIOD
                     render_df_with_progress(sec_stocks, ['SYMBOL', 'VERDICT', 'SCORE', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%'])
                 else: st.write("No safe setups found in this sector today.")
         
         st.markdown("---")
         st.subheader(f"📋 Master Screener ({len(filtered_df)})")
-        # Added EST_PERIOD
-        disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
+        
+        # UPGRADED: Added PE, Debt, and ROE to the main display
+        disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR', 'PATTERN', 'EST_PERIOD', 'PE_RATIO', 'DEBT_EQUITY', 'ROE', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
         render_df_with_progress(filtered_df, disp_cols)
 
         st.divider()
@@ -258,8 +267,8 @@ with tabs[1]:
     if not df.empty:
         breakouts = df[df['PATTERN'] == '⚡ Pre-Breakout Squeeze']
         if not breakouts.empty:
-            # Added EST_PERIOD
-            render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'EST_PERIOD', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
+            # UPGRADED: Injected Fundamentals
+            render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'EST_PERIOD', 'PE_RATIO', 'DEBT_EQUITY', 'ROE', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
             
             st.markdown("---")
             st.markdown("### 🎯 High-Conviction Actionables (The 2:00 PM Strategy)")
@@ -288,17 +297,13 @@ with tabs[2]:
         for _, row in port_df.iterrows():
             sym = row['symbol']
             
-            # THE FIX: Safely check if the market data actually exists before searching it
             if not df.empty and 'SYMBOL' in df.columns:
                 live_data = df[df['SYMBOL'] == sym]
             else:
-                live_data = pd.DataFrame() # Create a blank dataframe so the app doesn't crash
+                live_data = pd.DataFrame() 
                 
             cmp = float(live_data.iloc[0]['PRICE']) if not live_data.empty else float(row['entry_price'])
             target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
-            
-            entry = float(row['entry_price'])
-            original_sl = float(live_data.iloc[0]['STOP_LOSS']) if not live_data.empty else 0.0
             
             entry = float(row['entry_price'])
             original_sl = float(live_data.iloc[0]['STOP_LOSS']) if not live_data.empty else 0.0
@@ -393,14 +398,26 @@ with tabs[3]:
     st.subheader("💎 Institutional Swing Gems")
     if not df.empty:
         inst_df = df[df['CAP_CATEGORY'] != "Small/Penny Cap"]
-        alpha_gems = inst_df[inst_df['VERDICT'] == '💎 ALPHA'].sort_values("SCORE", ascending=False).head(10)
+        alpha_gems = inst_df[inst_df['VERDICT'].str.contains('💎', na=False)].sort_values("SCORE", ascending=False).head(10)
         
         if not alpha_gems.empty:
             for _, g in alpha_gems.iterrows():
-                # Added EST_PERIOD to the UI card
+                
+                # Dynamic coloring for the fundamental bar
+                pe_color = "#FF4B4B" if (g['PE_RATIO'] < 0 or g['PE_RATIO'] > 60) else "#A0AEC0"
+                de_color = "#FF4B4B" if g['DEBT_EQUITY'] > 150 else "#A0AEC0"
+                roe_color = "#00FF88" if g['ROE'] > 15 else "#FF4B4B" if g['ROE'] < 0 else "#A0AEC0"
+
                 st.markdown(f"""
                 <div class="gem-card">
-                    <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100 | Hold: {g['EST_PERIOD']}</span></h3>
+                    <h3 style="margin-top:0px; margin-bottom:5px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span></h3>
+                    
+                    <div class="funda-bar">
+                        <span style="color:{pe_color};"><b>P/E Ratio:</b> {g['PE_RATIO']:.1f}</span>
+                        <span style="color:{de_color};"><b>Debt/Equity:</b> {g['DEBT_EQUITY']:.1f}</span>
+                        <span style="color:{roe_color};"><b>ROE:</b> {g['ROE']:.1f}%</span>
+                    </div>
+
                     <div style="display:flex; justify-content:space-between;">
                         <p><b>CMP:</b> ₹{g['PRICE']:.2f}</p>
                         <p style="color:#00FF88;"><b>Target:</b> ₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
@@ -410,7 +427,7 @@ with tabs[3]:
                 </div>
                 """, unsafe_allow_html=True)
         else:
-            st.info("⚠️ No Alpha Gems found right now. The market is currently lacking safe, high-conviction momentum setups.")
+            st.info("⚠️ No Alpha Gems found right now. Wait for the Master Scan to fetch new Fundamental Data tonight.")
 
 # ==========================================
 # TAB 5: PENNY / MICRO SANDBOX
@@ -421,8 +438,8 @@ with tabs[4]:
         penny_df = df[df['CAP_CATEGORY'] == "Small/Penny Cap"]
         
         if not penny_df.empty:
-            # Added EST_PERIOD
-            render_df_with_progress(penny_df, ['VERDICT', 'SCORE', 'SYMBOL', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL'])
+            # UPGRADED: Injected Fundamentals
+            render_df_with_progress(penny_df, ['VERDICT', 'SCORE', 'SYMBOL', 'PATTERN', 'EST_PERIOD', 'PE_RATIO', 'DEBT_EQUITY', 'ROE', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL'])
             
             st.markdown("---")
             st.markdown("### ⚠️ Operator Alert (Actionables)")
@@ -448,7 +465,6 @@ with tabs[4]:
 with tabs[5]:
     st.subheader("🏆 Institutional Performance Analytics")
     if not hist_df.empty:
-        # --- CALCULATE METRICS ---
         total_trades = len(hist_df)
         wins = hist_df[hist_df['realized_pl'] > 0]
         losses = hist_df[hist_df['realized_pl'] <= 0]
