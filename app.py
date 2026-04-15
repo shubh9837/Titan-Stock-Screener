@@ -1,4 +1,3 @@
-Below is the current app.py code. Please only upgrade, do not downgrade the logic/ code: import streamlit as st
 import pandas as pd
 from supabase import create_client
 import datetime
