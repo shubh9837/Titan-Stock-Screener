@@ -34,7 +34,6 @@ def init_connection():
 
 supabase = init_connection()
 
-# UPGRADE: Reduced TTL to 60 seconds to instantly catch 15-min Intraday Pulses
 @st.cache_data(ttl=60) 
 def load_market_data():
     all_data, limit, offset = [], 1000, 0
@@ -54,18 +53,16 @@ def load_market_data():
             if col == 'RVOL': df[col] = 0.0
             else: df[col] = "N/A" if "RISK" in col or "PATTERN" in col else "Unknown" if "SECTOR" in col else 0
             
-    # UPGRADE: Force numeric types to prevent math errors from DB strings
     df['PRICE'] = pd.to_numeric(df['PRICE'], errors='coerce').fillna(0)
     df['TARGET'] = pd.to_numeric(df['TARGET'], errors='coerce').fillna(0)
     df['STOP_LOSS'] = pd.to_numeric(df['STOP_LOSS'], errors='coerce').fillna(0)
             
-    # UPGRADE: Dynamically recalculate Upside % and RR_RATIO based on LIVE Intraday Price
     df['UPSIDE_%'] = np.where(df['PRICE'] > 0, ((df['TARGET'] - df['PRICE']) / df['PRICE'] * 100), 0)
     
     risk = df['PRICE'] - df['STOP_LOSS']
     reward = df['TARGET'] - df['PRICE']
     df['RR_RATIO'] = np.where(risk > 0, reward / risk, 0)
-    df['RR_RATIO'] = df['RR_RATIO'].clip(lower=0, upper=10.0) # Cap at 10 to keep UI clean
+    df['RR_RATIO'] = df['RR_RATIO'].clip(lower=0, upper=10.0) 
     
     df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD" if x >= 40 else "🔴 AVOID")
     df['EST_PERIOD'] = df['SCORE'].apply(lambda x: "5-14 Days" if x >= 85 else "15-30 Days" if x >= 65 else "30-45 Days")
@@ -131,7 +128,8 @@ def get_macro_weather():
             sensex_val, sensex_pct = get_index_data("^BSESN")
             
             nifty_hist = yf.download("^NSEI", period="3mo", progress=False, ignore_tz=True)
-            if nifty_hist.empty: return "UNKNOWN", "Unable to fetch NIFTY data.", "white"
+            # FIXED: Changed "white" to "weather-yellow" so the invisible box bug is resolved
+            if nifty_hist.empty: return "🟡 UNKNOWN (Live Market)", "Unable to fetch NIFTY data from Yahoo Finance right now.", "weather-yellow"
             
             close_series = nifty_hist['Close']["^NSEI"] if isinstance(nifty_hist.columns, pd.MultiIndex) else nifty_hist['Close']
             close = float(close_series.iloc[-1])
@@ -146,7 +144,7 @@ def get_macro_weather():
             elif close > ema50: return "🟡 CAUTION (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY chopping below 20 EMA. Cut position sizes by 50%.</div>", "weather-yellow"
             else: return "🔴 RISK OFF (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is below 50 EMA. Cash is king. DO NOT take new swing trades.</div>", "weather-red"
     except Exception as e:
-        return "UNKNOWN", "Macro weather currently unavailable.", "weather-yellow"
+        return "🟡 UNKNOWN", "Macro weather currently unavailable due to API limits.", "weather-yellow"
 
 def load_table(table_name):
     res = supabase.table(table_name).select("*").execute()
@@ -162,7 +160,7 @@ with st.sidebar:
     if st.button("🔄 Force Live Data Sync", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-    st.caption(f"Last Sync: {datetime.datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Last Sync: {datetime.datetime.now().strftime('%H:%M:%S')} (Data refreshes every 60s)")
 
 st.markdown("<h1 style='text-align: center; font-size: 40px; color: #00FF88; margin-bottom: 5px;'>💎 Titan Quantum Pro</h1>", unsafe_allow_html=True)
 
@@ -182,7 +180,7 @@ def render_df_with_progress(data, cols_to_show):
     st.dataframe(
         data[cols_to_show].sort_values("SCORE", ascending=False),
         column_config={
-            "SCORE": st.column_config.ProgressColumn("Score", format="%f", min_value=0, max_value=100),
+            "SCORE": st.column_config.ProgressColumn("Score (0-100)", format="%f", min_value=0, max_value=100),
             "PRICE": st.column_config.NumberColumn("CMP (₹)", format="%.2f"),
             "TARGET": st.column_config.NumberColumn("Target (₹)", format="%.2f"),
             "UPSIDE_%": st.column_config.NumberColumn("Upside %", format="%.2f%%"),
@@ -220,7 +218,6 @@ with tabs[0]:
         disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
         render_df_with_progress(filtered_df, disp_cols)
 
-        # UPGRADE: Moved Top Performing Industries to the bottom of the tab
         st.markdown("---")
         st.subheader("🏢 Top Performing Industries")
         sec_df = inst_df.groupby('SECTOR')['SCORE'].mean().reset_index().sort_values('SCORE', ascending=False)
@@ -262,7 +259,6 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("⚡ Imminent Pre-Breakouts (> 50 Score)")
     if not df.empty:
-        # UPGRADE: Strict > 50 Score filter
         breakouts = df[(df['PATTERN'] == '⚡ Pre-Breakout Squeeze') & (df['SCORE'] > 50)]
         if not breakouts.empty:
             render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'EST_PERIOD', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
@@ -291,7 +287,7 @@ with tabs[1]:
             st.info("No imminent high-quality breakouts detected today.")
 
 # ==========================================
-# TAB 3: PORTFOLIO MANAGER (Dynamic Exit Engine)
+# TAB 3: PORTFOLIO MANAGER
 # ==========================================
 with tabs[2]:
     if not port_df.empty:
@@ -305,7 +301,6 @@ with tabs[2]:
             target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
             entry = float(row['entry_price'])
             
-            # UPGRADE: Dynamic Exit Health Engine
             health_status = "🟢 Healthy Uptrend"
             if not live_data.empty:
                 curr_score = float(live_data.iloc[0]['SCORE'])
@@ -313,7 +308,6 @@ with tabs[2]:
                 if curr_score < 40: health_status = "🔴 Momentum Dead (Consider Exit)"
                 elif "Consolidating" in pattern: health_status = "🟡 Choppy/Sideways"
 
-            # UPGRADE: Fixed trailing SL logic hierarchy
             algo_sl = float(live_data.iloc[0]['STOP_LOSS']) if not live_data.empty else (entry * 0.90)
             if cmp >= (entry * 1.10): trailing_sl = entry * 1.05 
             elif cmp >= (entry * 1.05): trailing_sl = entry 
@@ -367,7 +361,6 @@ with tabs[2]:
         with st.form("sell_trade"):
             s_sym = st.selectbox("➖ Register Sale", port_df['symbol'].unique() if not port_df.empty else [])
             s_price, s_qty = st.number_input("Sell Price", min_value=0.0, format="%.2f"), st.number_input("Qty to Sell", min_value=1, step=1)
-            # UPGRADE: Graveyard Analytics Reason Dropdown
             s_reason = st.selectbox("Reason for Exit", ["Target Hit 🎯", "Trailing SL Hit 🛡️", "Trend/EMA Broken 📉", "Cut Losses Early ✂️", "Manual/Time Exit ⏳"])
             
             if st.form_submit_button("Execute Sale") and not port_df.empty:
@@ -420,19 +413,47 @@ with tabs[4]:
         penny_df = df[df['CAP_CATEGORY'] == "Small/Penny Cap"]
         
         if not penny_df.empty:
-            # UPGRADE: Penny Stock Search
             p_search = st.selectbox("🔍 Search Penny Symbol", ["ALL"] + sorted(penny_df['SYMBOL'].dropna().unique().tolist()))
             if p_search != "ALL": penny_df = penny_df[penny_df['SYMBOL'] == p_search]
             
             render_df_with_progress(penny_df, ['VERDICT', 'SCORE', 'SYMBOL', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL'])
+            
+            st.markdown("---")
+            st.markdown("### ⚠️ Operator Alert (Actionables)")
+            high_vol_penny = penny_df[penny_df['RVOL'] >= 2.0].sort_values("SCORE", ascending=False).head(2)
+            
+            if not high_vol_penny.empty:
+                for _, p in high_vol_penny.iterrows():
+                    st.markdown(f"""
+                    <div class="action-card">
+                        <b>{p['SYMBOL']}</b> is experiencing massive unnatural volume (<b>{p['RVOL']:.1f}x</b> normal activity).<br>
+                        <i>Why it matters:</i> Penny stocks only move when operators step in. The algorithm detected heavy accumulation.<br>
+                        <b>Action:</b> High risk. If you enter, use strict capital sizing and place a hard Stop Loss at ₹{p['SUPPORT']:.2f}.
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.success("No suspicious operator volume detected in penny stocks today. Stay out of this segment for now.")
         else:
             st.info("No Penny Stocks processed in the database currently.")
+
+        # NEW: Penny Stock Educational Block
+        st.divider()
+        with st.expander("🛡️ Penny Stock Survival Guide (Read Before Trading)"):
+            st.markdown("""
+            ### 🚨 The Reality of Micro-Caps
+            Penny stocks do not usually move based on fundamentals or retail buying. They move because **Operators (Whales)** accumulate them quietly and then create artificial volume to trap retail traders.
+            
+            * **Volume is Everything:** Never buy a penny stock that is quietly consolidating. Only enter when you see an explosive Volume Spike (`RVOL` > 2.0x).
+            * **The Hit & Run Rule:** Do not marry penny stocks. If you get a 15% to 20% pop, secure your profits immediately. 
+            * **The 5% Rule:** Penny stocks can gap down violently overnight. Never allocate more than 5% of your total trading capital to a single penny stock.
+            * **Respect the Stop Loss:** If a penny stock loses its technical support, the operators have abandoned it. Sell instantly without hesitation.
+            """)
 
 # ==========================================
 # TAB 6: HISTORY (Advanced Analytics)
 # ==========================================
 with tabs[5]:
-    st.subheader("🏆 Institutional Performance Analytics & Graveyard")
+    st.subheader("🏆 Institutional Performance & Graveyard")
     if not hist_df.empty:
         total_trades = len(hist_df)
         wins = hist_df[hist_df['realized_pl'] > 0]
@@ -450,7 +471,6 @@ with tabs[5]:
         c4.metric("Profit Factor", f"{profit_factor:.2f}")
 
         st.markdown("---")
-        # Ensure exit_reason displays smoothly even if some older records don't have it
         if 'exit_reason' not in hist_df.columns: hist_df['exit_reason'] = "N/A"
         
         st.dataframe(hist_df[['symbol', 'buy_price', 'sell_price', 'pl_percentage', 'realized_pl', 'exit_reason', 'sell_date']].style.format({
