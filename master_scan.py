@@ -4,7 +4,6 @@ import pandas_ta_classic as ta
 import yfinance as yf
 import time, os
 from supabase import create_client
-import datetime
 
 # --- Database Connect ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -17,6 +16,18 @@ def safe_float(val, default=0.0):
 
 if __name__ == "__main__":
     print("Initiating Yahoo Bulk API Data Stream...")
+
+    # --- ADVANCED: Fetch NIFTY 50 baseline for Relative Strength (RS) ---
+    print("Fetching NIFTY 50 baseline for Relative Strength comparison...")
+    try:
+        nifty_data = yf.download("^NSEI", period="6mo", progress=False, ignore_tz=True)['Close']
+        if isinstance(nifty_data, pd.DataFrame): nifty_data = nifty_data["^NSEI"]
+        nifty_data.dropna(inplace=True)
+        nifty_return_50d = (nifty_data.iloc[-1] - nifty_data.iloc[-50]) / nifty_data.iloc[-50]
+        print(f"NIFTY 50-Day Return: {nifty_return_50d * 100:.2f}%")
+    except Exception as e:
+        print("Warning: Could not fetch NIFTY baseline. RS calculations will default to 0.")
+        nifty_return_50d = 0.0
 
     master = pd.read_csv("Tickers.csv")
     symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
@@ -33,19 +44,19 @@ if __name__ == "__main__":
         master['Clean_Sym'] = master['SYMBOL'].astype(str).str.strip() + '.NS'
         sector_map = dict(zip(master['Clean_Sym'], master[sector_col].fillna("Unknown")))
 
-    all_results = []
+    results = []
     success_count = 0
     BATCH_SIZE = 100
     CHUNK_SIZE = 300 
 
-    print(f"🚀 Phase 1: Technical Scan for {len(symbols)} stocks...")
+    print(f"🚀 Downloading data for {len(symbols)} stocks in chunks...")
 
     for i in range(0, len(symbols), CHUNK_SIZE):
         chunk = symbols[i:i+CHUNK_SIZE]
         print(f"\n📥 Fetching Batch {i+1} to {min(i+CHUNK_SIZE, len(symbols))}...")
         
         data = yf.download(chunk, period="1y", group_by="ticker", threads=True, ignore_tz=True)
-        time.sleep(1)
+        time.sleep(1) 
 
         for t in chunk:
             try:
@@ -77,12 +88,6 @@ if __name__ == "__main__":
                 df.ta.bbands(length=20, append=True) 
                 df.ta.atr(length=14, append=True)
                 df.ta.macd(fast=12, slow=26, signal=9, append=True) 
-                
-                # UPGRADE: Smart Volume (OBV)
-                df.ta.obv(append=True)
-                obv = safe_float(df['OBV'].iloc[-1] if 'OBV' in df else 0)
-                obv_20_max = safe_float(df['OBV'].rolling(20).max().iloc[-1] if 'OBV' in df else 0)
-                is_obv_breakout = obv >= obv_20_max and obv != 0
 
                 df['Vol_20_MA'] = df['Volume'].rolling(window=20).mean()
                 avg_vol = safe_float(df['Vol_20_MA'].iloc[-1])
@@ -98,48 +103,59 @@ if __name__ == "__main__":
 
                 bb_width = 100 
                 if 'BBU_20_2.0' in df and 'BBL_20_2.0' in df:
-                    bb_width = (safe_float(df['BBU_20_2.0'].iloc[-1]) - safe_float(df['BBL_20_2.0'].iloc[-1])) / curr_p * 100 
+                    bb_upper = safe_float(df['BBU_20_2.0'].iloc[-1])
+                    bb_lower = safe_float(df['BBL_20_2.0'].iloc[-1])
+                    bb_width = (bb_upper - bb_lower) / curr_p * 100 
 
                 pattern = "Uptrending" if curr_p > ema20 else "Consolidating"
                 is_bull_engulf = (close_yst < open_yst) and (open_tdy < close_yst) and (close_tdy > open_yst)
                 if is_bull_engulf: pattern = "🟢 Bullish Engulfing"
-                
-                vol_dry_up = False
-                if len(df) > 5 and df['Volume'].iloc[-4:-1].mean() < avg_vol and rvol > 1.5: vol_dry_up = True
 
+                # --- ADVANCED: VCP (Volatility Contraction) Volume Analysis ---
+                recent_df = df.iloc[-15:]
+                up_vol = recent_df[recent_df['Close'] > recent_df['Open']]['Volume'].mean()
+                down_vol = recent_df[recent_df['Close'] < recent_df['Open']]['Volume'].mean()
+                up_vol = safe_float(up_vol, 1.0)
+                down_vol = safe_float(down_vol, 1.0)
+                
+                is_vcp = down_vol < (up_vol * 0.75) # Down days have 25% less volume than up days
+                
                 is_pre_breakout = False
                 if bb_width < 6.0 and ((res_20 - curr_p) / curr_p) < 0.03 and macd_hist > macd_hist_prev:
                     is_pre_breakout = True
-                    pattern = "⚡ Pre-Breakout Squeeze"
+                    pattern = "⚡ VCP Squeeze" if is_vcp else "⚡ Pre-Breakout Squeeze"
 
+                # --- ADVANCED: Relative Strength vs NIFTY ---
+                stock_return_50d = (curr_p - safe_float(df['Close'].iloc[-50])) / safe_float(df['Close'].iloc[-50])
+                rs_outperformance = stock_return_50d - nifty_return_50d
+
+                # --- Core Algorithm Score ---
                 score = 0
                 if ema20 > 0 and curr_p > ema20: score += 10
                 if ema50 > 0 and ema20 > ema50: score += 10
                 if 55 <= rsi <= 70: score += 10 
-                if vol_dry_up: score += 20 
                 
-                # UPGRADE: Volume only counts if OBV confirms institutional accumulation
-                elif rvol > 1.5 and is_obv_breakout: score += 15 
+                # Volume Rewards
+                if is_vcp: score += 20 
+                elif rvol > 1.5: score += 10
                 
+                # Squeeze Rewards
                 if is_pre_breakout: score += 30 
                 elif bb_width < 5.0: score += 15 
+                
                 if is_bull_engulf: score += 20 
                 if weekly_trend == "Bullish": score += 20
+                if rs_outperformance > 0.10: score += 20 # +20 points if outperforming NIFTY by 10%
 
                 turnover = avg_vol * curr_p
                 if turnover < 20000000: score -= 30 
 
-                # UPGRADE: Dynamic Pivot Targets (6-Month Historical Resistance)
                 target_price = curr_p + (3 * atr)
                 stop_loss_price = curr_p - (2 * atr)
-                
-                max_high_6m = safe_float(df['High'].tail(125).max())
-                if max_high_6m > curr_p and target_price > max_high_6m:
-                    target_price = max_high_6m # Respect historical ceilings
-
                 rr_ratio = ((target_price - curr_p) / (curr_p - stop_loss_price)) if (curr_p - stop_loss_price) > 0 else 0
+                if rr_ratio > 10: rr_ratio = 10.0 
 
-                all_results.append({
+                results.append({
                     "SYMBOL": t.replace(".NS", ""),
                     "PRICE": round(curr_p, 2),
                     "SCORE": max(0, min(100, score)), 
@@ -147,7 +163,7 @@ if __name__ == "__main__":
                     "RVOL": round(rvol, 2),
                     "TARGET": round(target_price, 2) if atr > 0 else 0,
                     "STOP_LOSS": round(stop_loss_price, 2) if atr > 0 else 0,
-                    "RR_RATIO": round(min(rr_ratio, 10.0), 2),
+                    "RR_RATIO": round(rr_ratio, 2),
                     "SUPPORT": round(sup_20, 2),
                     "RESISTANCE": round(res_20, 2),
                     "PATTERN": pattern,
@@ -158,27 +174,17 @@ if __name__ == "__main__":
                     "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
                 })
                 success_count += 1
-            except: continue
 
-    # --- Phase 2: Earnings Shield ---
-    print("\n🛡️ Phase 2: Checking Earnings Risk for Top Setups...")
-    df_res = pd.DataFrame(all_results)
-    
-    if not df_res.empty:
-        top_stocks = df_res.nlargest(25, 'SCORE')['SYMBOL'].tolist()
-        now = datetime.datetime.now()
-        
-        for idx, r in enumerate(all_results):
-            if r['SYMBOL'] in top_stocks:
-                try:
-                    cal = yf.Ticker(f"{r['SYMBOL']}.NS").calendar
-                    if cal and 'Earnings Date' in cal:
-                        # yfinance calendar format handles lists or single dates
-                        earn_date = cal['Earnings Date'][0] if isinstance(cal['Earnings Date'], list) else cal['Earnings Date']
-                        if pd.notnull(earn_date):
-                            days_to_earn = (earn_date.replace(tzinfo=None) - now).days
-                            if 0 <= days_to_earn <= 7:
-                                all_results[idx]['EARNINGS_RISK'] = f"⚠️ RISK: Earnings in {days_to_earn}d"
-                except: pass
+                if len(results) >= BATCH_SIZE:
+                    supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
+                    print(f"📦 [STREAM] Scanned & Pushed a batch of {BATCH_SIZE}. Validated: {success_count}")
+                    results = [] 
 
-print("\n📦 Pushing analyzed data to Supabase...")
+            except Exception as e:
+                print(f"❌ CRASH ON {t}: {str(e)}")
+                continue
+
+    if results: 
+        supabase.table('market_scans').upsert(results, on_conflict="SYMBOL").execute()
+
+    print(f"✅ Full Bulk Stream Complete. Validated: {success_count} stocks.")
