@@ -5,16 +5,11 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from supabase import create_client
-from twilio.rest import Client
 
+# --- Connections ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-TWILIO_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_FROM = os.environ.get("TWILIO_WHATSAPP_NUMBER") 
-MY_PHONE = os.environ.get("MY_PHONE_NUMBER")           
 
 def safe_float(val, default=0.0):
     if pd.isna(val) or np.isinf(val): return default
@@ -25,6 +20,7 @@ def update_live_prices():
     master = pd.read_csv("Tickers.csv")
     symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
     
+    # We only need 5 days of data for a quick intraday price update
     data = yf.download(symbols, period="5d", group_by="ticker", threads=True, ignore_tz=True)
     
     updates = []
@@ -48,6 +44,7 @@ def update_live_prices():
                 "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
             })
             
+            # Push in small batches
             if len(updates) >= 200:
                 supabase.table('market_scans').upsert(updates, on_conflict="SYMBOL").execute()
                 updates = []
@@ -57,76 +54,45 @@ def update_live_prices():
         supabase.table('market_scans').upsert(updates, on_conflict="SYMBOL").execute()
     print("✅ Live prices updated in database.")
 
-def monitor_breakouts(ist_now):
-    print("🔍 Checking for confirmed afternoon breakouts...")
+def check_portfolio_gap_downs():
+    print("🔍 Checking Portfolio for Emergency Gap Downs...")
+    res = supabase.table('portfolio').select("*").execute()
+    portfolio = res.data
     
-    res = supabase.table('market_scans').select("*").eq('PATTERN', '⚡ Pre-Breakout Squeeze').execute()
-    candidates = res.data
-    
-    if not candidates:
-        print("No Pre-Breakout candidates to monitor right now.")
+    if not portfolio:
+        print("Portfolio is empty. All clear.")
         return
 
-    fresh_breakouts = []
-    db_updates = []
-    
-    for c in candidates:
-        sym = c['SYMBOL']
-        live_price = float(c['PRICE'])
-        resistance = float(c['RESISTANCE'])
-        target = float(c['TARGET'])
-        stop = float(c['STOP_LOSS'])
-        score = float(c['SCORE'])
+    for item in portfolio:
+        sym = item['symbol']
+        entry = float(item['entry_price'])
         
-        # UPGRADE: The 2:00 PM Confirmation Rule
-        if live_price > resistance and ist_now.hour >= 14:
-            upside = ((target - live_price) / live_price) * 100
-            est_period = "5-14 Days" if score >= 85 else "15-30 Days" if score >= 65 else "30-45 Days"
-            
-            fresh_breakouts.append(
-                f"🚀 *{sym}* is BREAKING OUT!\n"
-                f"Entry: ₹{live_price:.2f} (Crossed ₹{resistance:.2f})\n"
-                f"Target: ₹{target:.2f} (+{upside:.1f}%)\n"
-                f"Stop Loss: ₹{stop:.2f}\n"
-                f"Hold Period: {est_period}\n"
-                f"Score: {score}/100"
-            )
-            
-            db_updates.append({
-                "SYMBOL": sym,
-                "PATTERN": "🟢 BREAKOUT CONFIRMED",
-                "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
-            })
-
-    if fresh_breakouts:
-        msg = "⚡ *TITAN QUANTUM: 2:00 PM CONFIRMED BREAKOUT* ⚡\n\n"
-        msg += "\n\n---\n".join(fresh_breakouts)
-        msg += "\n\n_Note: Afternoon breakout confirmed. Proceed with sizing rules._"
-
+        # Pull live price
         try:
-            client = Client(TWILIO_SID, TWILIO_TOKEN)
-            client.messages.create(from_=TWILIO_FROM, body=msg, to=MY_PHONE)
-            print(f"📱 WhatsApp Alert sent! {len(fresh_breakouts)} confirmed breakouts.")
-            
-            supabase.table('market_scans').upsert(db_updates, on_conflict="SYMBOL").execute()
-            print("✅ Database updated to prevent duplicate alerts.")
+            live_data = yf.download(f"{sym}.NS", period="1d", progress=False, ignore_tz=True)
+            if not live_data.empty:
+                live_price = float(live_data['Close'].iloc[-1])
+                
+                # If price is 10% below entry, it's a catastrophic gap down
+                if live_price <= (entry * 0.90):
+                    print(f"🚨 EMERGENCY: {sym} has gapped down heavily! CMP: ₹{live_price:.2f} (Entry: ₹{entry:.2f}). EXIT IMMEDIATELY.")
+                else:
+                    print(f"✅ {sym} holding steady at ₹{live_price:.2f}.")
         except Exception as e:
-            print(f"❌ Error sending alert: {e}")
-    else:
-        print("No confirmed crossovers in this window.")
+            print(f"Could not check live status for {sym}: {e}")
 
 if __name__ == "__main__":
+    # 1. Always sync live prices first
     update_live_prices()
     
+    # 2. Check the time (Convert UTC from GitHub to IST)
     ist_now = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
     print(f"Current IST Time: {ist_now.strftime('%H:%M')}")
     
+    # 3. Check if the Indian Market is currently Open (9:00 AM to 3:30 PM IST)
     is_market_open = (ist_now.hour == 9 and ist_now.minute >= 0) or (10 <= ist_now.hour <= 14) or (ist_now.hour == 15 and ist_now.minute <= 30)
     
     if is_market_open:
-        if TWILIO_SID and TWILIO_TOKEN:
-            monitor_breakouts(ist_now) # Pass the time to the function
-        else:
-            print("⚠️ Twilio credentials missing.")
+        check_portfolio_gap_downs()
     else:
         print("Market is currently closed. Live price sync complete.")
