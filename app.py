@@ -27,7 +27,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- DATABASE CONNECTIONS ---
 @st.cache_resource
 def init_connection():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -47,7 +46,7 @@ def load_market_data():
     df = pd.DataFrame(all_data)
     if df.empty: return df
     
-    expected_cols = ['SECTOR', 'EARNINGS_RISK', 'CAP_CATEGORY', 'SUPPORT', 'RESISTANCE', 'PATTERN', 'RR_RATIO', 'RVOL']
+    expected_cols = ['SECTOR', 'EARNINGS_RISK', 'CAP_CATEGORY', 'SUPPORT', 'RESISTANCE', 'PATTERN', 'RR_RATIO', 'RVOL', 'INSTITUTIONAL_TREND']
     for col in expected_cols:
         if col not in df.columns: 
             if col == 'RVOL': df[col] = 0.0
@@ -122,13 +121,10 @@ def get_macro_weather():
             expectation = "📈 Expectation: Strong Gap-Up opening." if direction > 0.4 else "↗️ Expectation: Mildly positive opening." if direction > 0.1 else "📉 Expectation: Heavy Gap-Down opening." if direction < -0.4 else "↘️ Expectation: Mildly negative opening." if direction < -0.1 else "⚖️ Expectation: Flat opening expected."
             msg += f"<div class='market-expectation'>{expectation}</div>"
             return status, msg, css_class
-            
         else:
             nifty_val, nifty_pct = get_index_data("^NSEI")
             sensex_val, sensex_pct = get_index_data("^BSESN")
-            
             nifty_hist = yf.download("^NSEI", period="3mo", progress=False, ignore_tz=True)
-            # FIXED: Changed "white" to "weather-yellow" so the invisible box bug is resolved
             if nifty_hist.empty: return "🟡 UNKNOWN (Live Market)", "Unable to fetch NIFTY data from Yahoo Finance right now.", "weather-yellow"
             
             close_series = nifty_hist['Close']["^NSEI"] if isinstance(nifty_hist.columns, pd.MultiIndex) else nifty_hist['Close']
@@ -154,7 +150,6 @@ df = load_market_data()
 port_df = load_table('portfolio')
 hist_df = load_table('trade_history')
 
-# --- SIDEBAR & HEADER ---
 with st.sidebar:
     st.markdown("### ⚙️ System Controls")
     if st.button("🔄 Force Live Data Sync", use_container_width=True):
@@ -164,7 +159,6 @@ with st.sidebar:
 
 st.markdown("<h1 style='text-align: center; font-size: 40px; color: #00FF88; margin-bottom: 5px;'>💎 Titan Quantum Pro</h1>", unsafe_allow_html=True)
 
-# --- MACRO WEATHER FILTER ---
 status, msg, css_class = get_macro_weather()
 st.markdown(f"""
 <div class="{css_class}">
@@ -173,7 +167,28 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# --- UI TABS ---
+# UPGRADE: Market Breadth Engine
+if not df.empty:
+    bullish_count = len(df[df['INSTITUTIONAL_TREND'] == 'Bullish'])
+    total_count = len(df)
+    breadth_pct = (bullish_count / total_count) * 100 if total_count > 0 else 0
+    
+    if breadth_pct < 40:
+        st.error(f"📉 **MARKET BREADTH ALERT:** Only {breadth_pct:.1f}% of all stocks are in a Bullish Trend. The broader market is extremely weak. Avoid risky breakouts and reduce position sizes.")
+    elif breadth_pct > 70:
+        st.success(f"🔥 **STRONG BREADTH:** {breadth_pct:.1f}% of all stocks are Bullish. Favorable conditions for aggressive swing trading.")
+    else:
+        st.info(f"⚖️ **NEUTRAL BREADTH:** {breadth_pct:.1f}% of stocks are Bullish. The market is mixed. Stick to high-conviction specific setups.")
+
+if not df.empty and 'UPDATED_AT' in df.columns:
+    try:
+        latest_update = pd.to_datetime(df['UPDATED_AT'].max())
+        now_utc = datetime.datetime.utcnow()
+        delta_hours = (now_utc - latest_update).total_seconds() / 3600
+        if delta_hours > 24 and now_utc.weekday() < 5:
+            st.error(f"🔴 CRITICAL ALARM: The Master EOD Scan failed to update! Data is {int(delta_hours)} hours old.", icon="🚨")
+    except: pass
+
 tabs = st.tabs(["📊 Market Screener", "🎯 Breakout Watchlist", "💼 Portfolio", "🚀 Swing Gems", "🎰 Penny Sandbox", "🏆 History"])
 
 def render_df_with_progress(data, cols_to_show):
@@ -215,7 +230,7 @@ with tabs[0]:
         
         st.markdown("---")
         st.subheader(f"📋 Master Screener ({len(filtered_df)})")
-        disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR', 'PATTERN', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
+        disp_cols = ['VERDICT', 'SCORE', 'SYMBOL', 'SECTOR', 'PATTERN', 'EARNINGS_RISK', 'EST_PERIOD', 'PRICE', 'TARGET', 'UPSIDE_%', 'RVOL', 'RR_RATIO', 'SUPPORT', 'RESISTANCE']
         render_df_with_progress(filtered_df, disp_cols)
 
         st.markdown("---")
@@ -239,7 +254,7 @@ with tabs[0]:
             
             **1. ⚡ Pre-Breakout Squeeze**
             * **Meaning:** The stock's volatility is dead (Bollinger Bands are pinching tight). It is resting just below a major ceiling (Resistance). A violent move is loading.
-            * **Actionable:** Do NOT buy immediately. Set a price alert on your broker at the exact `Resistance` price. If it crosses that price at 2:00 PM with volume, buy.
+            * **Actionable:** Do NOT buy immediately. Set a price alert on your broker at the exact `Resistance` price. Wait for 2:00 PM confirmation with volume.
             
             **2. 🟢 Bullish Engulfing**
             * **Meaning:** The green candle body completely swallowed yesterday's red candle. Institutional buyers stepped in forcefully to stop the stock from falling further.
@@ -261,7 +276,7 @@ with tabs[1]:
     if not df.empty:
         breakouts = df[(df['PATTERN'] == '⚡ Pre-Breakout Squeeze') & (df['SCORE'] > 50)]
         if not breakouts.empty:
-            render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'EST_PERIOD', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
+            render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'EARNINGS_RISK', 'EST_PERIOD', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
             
             st.markdown("---")
             st.markdown("### 🎯 Top Actionable Setups")
@@ -277,7 +292,7 @@ with tabs[1]:
                         <b>{b['SYMBOL']}</b> | Crosses Resistance at <b>₹{b['RESISTANCE']:.2f}</b><br>
                         <i>Why:</i> Score is {b['SCORE']}/100. Upside is {b['UPSIDE_%']:.1f}%.<br>
                         <i>Status:</i> {vol_text}.<br>
-                        <b>ACTION PLAN:</b> If CMP > ₹{b['RESISTANCE']:.2f} at 2:00 PM, Buy. Hold for {b['EST_PERIOD']}.
+                        <b>ACTION PLAN:</b> If CMP > ₹{b['RESISTANCE']:.2f} and time is after 2:00 PM, Buy. Hold for {b['EST_PERIOD']}.
                     </div>
                     """, unsafe_allow_html=True)
                 with col_chart:
@@ -287,7 +302,7 @@ with tabs[1]:
             st.info("No imminent high-quality breakouts detected today.")
 
 # ==========================================
-# TAB 3: PORTFOLIO MANAGER
+# TAB 3: PORTFOLIO MANAGER (Dynamic Exit Engine)
 # ==========================================
 with tabs[2]:
     if not port_df.empty:
@@ -388,9 +403,11 @@ with tabs[3]:
         
         if not alpha_gems.empty:
             for _, g in alpha_gems.iterrows():
+                earn_warning = f"<p style='color:#FFC107;'><b>{g['EARNINGS_RISK']}</b></p>" if g['EARNINGS_RISK'] != "✅ Clear" else ""
                 st.markdown(f"""
                 <div class="gem-card">
                     <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100 | Hold: {g['EST_PERIOD']}</span></h3>
+                    {earn_warning}
                     <div style="display:flex; justify-content:space-between;">
                         <p><b>CMP:</b> ₹{g['PRICE']:.2f}</p>
                         <p style="color:#00FF88;"><b>Target:</b> ₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
@@ -436,7 +453,6 @@ with tabs[4]:
         else:
             st.info("No Penny Stocks processed in the database currently.")
 
-        # NEW: Penny Stock Educational Block
         st.divider()
         with st.expander("🛡️ Penny Stock Survival Guide (Read Before Trading)"):
             st.markdown("""
@@ -453,7 +469,7 @@ with tabs[4]:
 # TAB 6: HISTORY (Advanced Analytics)
 # ==========================================
 with tabs[5]:
-    st.subheader("🏆 Institutional Performance & Graveyard")
+    st.subheader("🏆 Institutional Performance Analytics & Graveyard")
     if not hist_df.empty:
         total_trades = len(hist_df)
         wins = hist_df[hist_df['realized_pl'] > 0]
