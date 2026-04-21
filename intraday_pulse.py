@@ -7,7 +7,6 @@ import yfinance as yf
 from supabase import create_client
 from twilio.rest import Client
 
-# --- Connections ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -26,7 +25,6 @@ def update_live_prices():
     master = pd.read_csv("Tickers.csv")
     symbols = [f"{str(s).strip()}.NS" for s in master['SYMBOL'].dropna().unique()]
     
-    # We only need 5 days of data for a quick intraday price update
     data = yf.download(symbols, period="5d", group_by="ticker", threads=True, ignore_tz=True)
     
     updates = []
@@ -50,7 +48,6 @@ def update_live_prices():
                 "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
             })
             
-            # Push in small batches
             if len(updates) >= 200:
                 supabase.table('market_scans').upsert(updates, on_conflict="SYMBOL").execute()
                 updates = []
@@ -60,10 +57,9 @@ def update_live_prices():
         supabase.table('market_scans').upsert(updates, on_conflict="SYMBOL").execute()
     print("✅ Live prices updated in database.")
 
-def monitor_breakouts():
-    print("🔍 Checking for fresh intraday breakouts...")
+def monitor_breakouts(ist_now):
+    print("🔍 Checking for confirmed afternoon breakouts...")
     
-    # 1. Get all stocks that are currently resting at resistance (Pre-Breakouts)
     res = supabase.table('market_scans').select("*").eq('PATTERN', '⚡ Pre-Breakout Squeeze').execute()
     candidates = res.data
     
@@ -82,14 +78,11 @@ def monitor_breakouts():
         stop = float(c['STOP_LOSS'])
         score = float(c['SCORE'])
         
-        # 2. THE TRIGGER: Live price just crossed the resistance line
-        if live_price > resistance:
+        # UPGRADE: The 2:00 PM Confirmation Rule
+        if live_price > resistance and ist_now.hour >= 14:
             upside = ((target - live_price) / live_price) * 100
-            
-            # Recreate Dynamic Holding Period Logic
             est_period = "5-14 Days" if score >= 85 else "15-30 Days" if score >= 65 else "30-45 Days"
             
-            # Build the beautiful WhatsApp message
             fresh_breakouts.append(
                 f"🚀 *{sym}* is BREAKING OUT!\n"
                 f"Entry: ₹{live_price:.2f} (Crossed ₹{resistance:.2f})\n"
@@ -99,51 +92,41 @@ def monitor_breakouts():
                 f"Score: {score}/100"
             )
             
-            # 3. Stage database update to prevent spamming the user on the next 15-min run
             db_updates.append({
                 "SYMBOL": sym,
                 "PATTERN": "🟢 BREAKOUT CONFIRMED",
                 "UPDATED_AT": time.strftime('%Y-%m-%d %H:%M:%S')
             })
 
-    # 4. Send WhatsApp Alert if we found any fresh breakouts
     if fresh_breakouts:
-        msg = "⚡ *TITAN QUANTUM: LIVE BREAKOUT ALERT* ⚡\n\n"
+        msg = "⚡ *TITAN QUANTUM: 2:00 PM CONFIRMED BREAKOUT* ⚡\n\n"
         msg += "\n\n---\n".join(fresh_breakouts)
-        msg += "\n\n_Note: Verify volume on your chart before entering._"
+        msg += "\n\n_Note: Afternoon breakout confirmed. Proceed with sizing rules._"
 
         try:
             client = Client(TWILIO_SID, TWILIO_TOKEN)
-            message = client.messages.create(
-                from_=TWILIO_FROM,
-                body=msg,
-                to=MY_PHONE
-            )
-            print(f"📱 WhatsApp Alert sent! {len(fresh_breakouts)} new breakouts.")
+            client.messages.create(from_=TWILIO_FROM, body=msg, to=MY_PHONE)
+            print(f"📱 WhatsApp Alert sent! {len(fresh_breakouts)} confirmed breakouts.")
             
-            # Instantly update the DB so we don't send this alert again today
             supabase.table('market_scans').upsert(db_updates, on_conflict="SYMBOL").execute()
-            print("✅ Database patterns updated to 'BREAKOUT CONFIRMED' to prevent duplicate alerts.")
+            print("✅ Database updated to prevent duplicate alerts.")
         except Exception as e:
             print(f"❌ Error sending alert: {e}")
     else:
-        print("No new resistance crossovers in this 15-minute window.")
+        print("No confirmed crossovers in this window.")
 
 if __name__ == "__main__":
-    # 1. Always sync live prices first
     update_live_prices()
     
-    # 2. Check the time (Convert UTC from GitHub to IST)
     ist_now = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
     print(f"Current IST Time: {ist_now.strftime('%H:%M')}")
     
-    # 3. Check if the Indian Market is currently Open (9:00 AM to 3:30 PM IST)
     is_market_open = (ist_now.hour == 9 and ist_now.minute >= 0) or (10 <= ist_now.hour <= 14) or (ist_now.hour == 15 and ist_now.minute <= 30)
     
     if is_market_open:
         if TWILIO_SID and TWILIO_TOKEN:
-            monitor_breakouts()
+            monitor_breakouts(ist_now) # Pass the time to the function
         else:
-            print("⚠️ Twilio credentials missing in GitHub Secrets.")
+            print("⚠️ Twilio credentials missing.")
     else:
-        print("Market is currently closed. Live price sync complete, skipping breakout monitor.")
+        print("Market is currently closed. Live price sync complete.")
