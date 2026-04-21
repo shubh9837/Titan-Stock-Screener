@@ -181,4 +181,4 @@ if __name__ == "__main__":
                                 all_results[idx]['EARNINGS_RISK'] = f"⚠️ RISK: Earnings in {days_to_earn}d"
                 except: pass
 
-    print("\n📦 Pushing analyzed
+print("\n📦 Pushing analyzed data to Supabase...")
