@@ -64,7 +64,7 @@ def load_market_data():
     df['RR_RATIO'] = np.where(risk > 0, reward / risk, 0)
     df['RR_RATIO'] = df['RR_RATIO'].clip(lower=0, upper=10.0) 
     
-    df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 85 else "🟢 BUY" if x >= 70 else "🟡 HOLD" if x >= 40 else "🔴 AVOID")
+    df['VERDICT'] = df['SCORE'].apply(lambda x: "💎 ALPHA" if x >= 95 else "🟢 BUY" if x >= 75 else "🟡 HOLD" if x >= 40 else "🔴 AVOID")
     df['EST_PERIOD'] = df['SCORE'].apply(lambda x: "5-14 Days" if x >= 85 else "15-30 Days" if x >= 65 else "30-45 Days")
     return df
 
