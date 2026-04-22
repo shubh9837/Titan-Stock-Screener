@@ -299,7 +299,7 @@ with tabs[1]:
             st.info("No imminent high-quality breakouts detected today.")
 
 # ==========================================
-# TAB 3: PORTFOLIO MANAGER
+# TAB 3: PORTFOLIO MANAGER (Smart Time Stop & Scale-Out Engine)
 # ==========================================
 with tabs[2]:
     if not port_df.empty:
@@ -313,9 +313,23 @@ with tabs[2]:
             target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
             entry = float(row['entry_price'])
             
+            # --- Extract Live Momentum Metrics for Smart Time Stop ---
+            curr_score = float(live_data.iloc[0]['SCORE']) if not live_data.empty else 0
+            curr_rvol = float(live_data.iloc[0]['RVOL']) if not live_data.empty else 0
+            
+            # --- Time Stop & Opportunity Cost Engine ---
+            try:
+                entry_date = pd.to_datetime(row['date']).date()
+                days_held = (datetime.date.today() - entry_date).days
+                
+                est_period = live_data.iloc[0]['EST_PERIOD'] if not live_data.empty else "15-30 Days"
+                max_days = int(est_period.split('-')[1].split(' ')[0])
+            except:
+                days_held = 0
+                max_days = 30 
+            
             health_status = "🟢 Healthy Uptrend"
             if not live_data.empty:
-                curr_score = float(live_data.iloc[0]['SCORE'])
                 pattern = live_data.iloc[0]['PATTERN']
                 if curr_score < 40: health_status = "🔴 Momentum Dead (Consider Exit)"
                 elif "Consolidating" in pattern: health_status = "🟡 Choppy/Sideways"
@@ -331,11 +345,23 @@ with tabs[2]:
             target_val = target * qty 
             pnl_perc = ((cmp - entry) / entry) * 100
             
-            action = "🚨 EXIT (SL/Trend Broken)" if cmp <= trailing_sl or "Dead" in health_status else "✅ BOOK PROFIT" if cmp >= target else "⏳ HOLD"
+            # --- UPGRADED "SCALE-OUT & SMART TIME STOP" EXIT LOGIC ---
+            if cmp <= trailing_sl or "Dead" in health_status:
+                action = "🚨 EXIT FULL (SL/Trend Broken)"
+            elif cmp >= target:
+                action = "🎯 TARGET HIT: Sell 50%, Trail Rest"
+            elif days_held > max_days:
+                if curr_score >= 65 or curr_rvol >= 1.2:
+                    action = f"🔥 LATE BLOOMER (Held {days_held}d) - Momentum Detected"
+                else:
+                    action = f"⏳ TIME STOP (Held {days_held}d) - Dead Money"
+            else:
+                action = "⏳ HOLD"
             
             port_calc.append({
                 "Action": action, "Symbol": sym, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
                 "Health Status": health_status, "P&L (%)": pnl_perc, "Target": target, "Trailing SL": trailing_sl,
+                "Days Held": days_held,
                 "Invested (₹)": invested, "Current (₹)": cur_val
             })
             
@@ -373,7 +399,7 @@ with tabs[2]:
         with st.form("sell_trade"):
             s_sym = st.selectbox("➖ Register Sale", port_df['symbol'].unique() if not port_df.empty else [])
             s_price, s_qty = st.number_input("Sell Price", min_value=0.0, format="%.2f"), st.number_input("Qty to Sell", min_value=1, step=1)
-            s_reason = st.selectbox("Reason for Exit", ["Target Hit 🎯", "Trailing SL Hit 🛡️", "Trend/EMA Broken 📉", "Cut Losses Early ✂️", "Manual/Time Exit ⏳"])
+            s_reason = st.selectbox("Reason for Exit", ["Target Hit (Partial/Runner) 🎯", "Trailing SL Hit 🛡️", "Trend/EMA Broken 📉", "Time Expiration (Dead Money) ⏳", "Cut Losses Early ✂️", "Manual Exit"])
             
             if st.form_submit_button("Execute Sale") and not port_df.empty:
                 holding = port_df[port_df['symbol'] == s_sym].iloc[0]
@@ -388,7 +414,6 @@ with tabs[2]:
                     if new_qty == 0: supabase.table('portfolio').delete().eq('id', holding['id']).execute()
                     else: supabase.table('portfolio').update({"qty": new_qty}).eq('id', holding['id']).execute()
                     st.rerun()
-
 # ==========================================
 # TAB 4: SWING GEMS
 # ==========================================
