@@ -82,23 +82,45 @@ def get_index_data(ticker_symbol):
 
 def render_interactive_chart(symbol, unique_key_suffix=""):
     try:
-        data = yf.download(f"{symbol}.NS", period="3mo", progress=False, ignore_tz=True)
-        if data.empty: return st.error("Chart data unavailable.")
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.droplevel(1)
+        # 1. Fetch data safely
+        data = yf.download(f"{symbol}.NS", period="3mo", progress=False)
+        
+        if data.empty: 
+            return st.error(f"Chart data currently unavailable for {symbol}.")
             
+        # 2. BULLETPROOF FIX: Flatten columns for newer yfinance versions
+        if isinstance(data.columns, pd.MultiIndex):
+            data = data.copy()
+            data.columns = [col[0] for col in data.columns]
+            
+        # 3. EXPANDER FIX: Strip timezones so Plotly doesn't turn invisible inside st.expander
+        if data.index.tzinfo is not None:
+            data.index = data.index.tz_localize(None)
+
+        # 4. Calculate EMAs
         data['EMA20'] = data['Close'].ewm(span=20, adjust=False).mean()
         data['EMA50'] = data['Close'].ewm(span=50, adjust=False).mean()
         
-        fig = go.Figure(data=[go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name='Price')])
+        # 5. Build the chart
+        fig = go.Figure(data=[go.Candlestick(
+            x=data.index, open=data['Open'], high=data['High'], 
+            low=data['Low'], close=data['Close'], name='Price'
+        )])
         fig.add_trace(go.Scatter(x=data.index, y=data['EMA20'], line=dict(color='#00B8FF', width=1.5), name='20 EMA'))
         fig.add_trace(go.Scatter(x=data.index, y=data['EMA50'], line=dict(color='#FFC107', width=1.5), name='50 EMA'))
         
-        fig.update_layout(title=f"{symbol} - Live Technicals", template='plotly_dark', height=400, margin=dict(l=0, r=0, t=40, b=0), xaxis_rangeslider_visible=False)
+        fig.update_layout(
+            title=f"{symbol} - Live Technicals", 
+            template='plotly_dark', 
+            height=400, 
+            margin=dict(l=0, r=0, t=40, b=0), 
+            xaxis_rangeslider_visible=False
+        )
+        
         st.plotly_chart(fig, use_container_width=True, key=f"chart_{symbol}_{unique_key_suffix}")
+        
     except Exception as e:
-        st.error("Could not load chart.")
-
+        st.error(f"Could not render chart. Engine Error: {str(e)}")
 @st.cache_data(ttl=60) 
 def get_macro_weather():
     try:
