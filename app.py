@@ -377,7 +377,7 @@ with tabs[2]:
             else:
                 st.info(f"No active holdings in {owner}.")
 
-    # 2. DEEP DIVE ANALYSIS SECTION (NOW COLLAPSIBLE)
+# 2. DEEP DIVE ANALYSIS SECTION (NOW COLLAPSIBLE)
     st.markdown("---")
     with st.expander("🔍 Deep Dive Analysis (Click to Expand)", expanded=False):
         col_dd1, col_dd2 = st.columns(2)
@@ -390,21 +390,49 @@ with tabs[2]:
                 live_data = df[df['SYMBOL'] == dd_sym]
                 if not live_data.empty:
                     g = live_data.iloc[0]
+                    
+                    # --- UPGRADED DEEP DIVE UI CARD ---
                     st.markdown(f"""
                     <div class="gem-card">
-                        <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Algo Score: {g['SCORE']}/100</span></h3>
-                        <div style="display:flex; justify-content:space-between;">
-                            <p><b>Target:</b> ₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
-                            <p style="color:#FF4B4B;"><b>Stop Loss:</b> ₹{g['STOP_LOSS']:.2f}</p>
-                            <p><b>Pattern:</b> {g['PATTERN']}</p>
-                            <p><b>RVOL:</b> {g['RVOL']}x</p>
+                        <h3 style="margin-top:0px; margin-bottom:15px;">
+                            {g['SYMBOL']} 
+                            <span style="font-size:16px; margin-left:10px;">{g['VERDICT']}</span>
+                            <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span>
+                        </h3>
+                        
+                        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+                            <div>
+                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Sector</p>
+                                <p style="margin:0; font-weight:600;">{g['SECTOR']}</p>
+                            </div>
+                            <div>
+                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Expected Hold</p>
+                                <p style="margin:0; font-weight:600;">{g['EST_PERIOD']}</p>
+                            </div>
+                            <div>
+                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Volume Spike</p>
+                                <p style="margin:0; font-weight:600;">{g['RVOL']}x Avg</p>
+                            </div>
+                            <div>
+                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Chart Pattern</p>
+                                <p style="margin:0; font-weight:600;">{g['PATTERN']}</p>
+                            </div>
+                            <div>
+                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Algo Target</p>
+                                <p style="margin:0; font-weight:600; color:#00FF88;">₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
+                            </div>
+                            <div>
+                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Hard Stop Loss</p>
+                                <p style="margin:0; font-weight:600; color:#FF4B4B;">₹{g['STOP_LOSS']:.2f}</p>
+                            </div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
+                    
                     render_interactive_chart(dd_sym, "deep_dive")
         else:
             col_dd2.info("Add stocks to this portfolio to unlock Deep Dive.")
-
+            
     # 3. DYNAMIC ADD / SELL CONTROLS
     st.markdown("---")
     col_add, col_sell = st.columns(2)
