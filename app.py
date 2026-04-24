@@ -394,42 +394,17 @@ with tabs[2]:
                     # --- UPGRADED DEEP DIVE UI CARD ---
                     st.markdown(f"""
                     <div class="gem-card">
-                        <h3 style="margin-top:0px; margin-bottom:15px;">
-                            {g['SYMBOL']} 
-                            <span style="font-size:16px; margin-left:10px;">{g['VERDICT']}</span>
-                            <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span>
-                        </h3>
-                        
+                        <h3 style="margin-top:0px; margin-bottom:15px;">{g['SYMBOL']} <span style="font-size:16px; margin-left:10px;">{g['VERDICT']}</span><span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span></h3>
                         <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
-                            <div>
-                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Sector</p>
-                                <p style="margin:0; font-weight:600;">{g['SECTOR']}</p>
-                            </div>
-                            <div>
-                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Expected Hold</p>
-                                <p style="margin:0; font-weight:600;">{g['EST_PERIOD']}</p>
-                            </div>
-                            <div>
-                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Volume Spike</p>
-                                <p style="margin:0; font-weight:600;">{g['RVOL']}x Avg</p>
-                            </div>
-                            <div>
-                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Chart Pattern</p>
-                                <p style="margin:0; font-weight:600;">{g['PATTERN']}</p>
-                            </div>
-                            <div>
-                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Algo Target</p>
-                                <p style="margin:0; font-weight:600; color:#00FF88;">₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
-                            </div>
-                            <div>
-                                <p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Hard Stop Loss</p>
-                                <p style="margin:0; font-weight:600; color:#FF4B4B;">₹{g['STOP_LOSS']:.2f}</p>
-                            </div>
+                            <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Sector</p><p style="margin:0; font-weight:600;">{g['SECTOR']}</p></div>
+                            <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Expected Hold</p><p style="margin:0; font-weight:600;">{g['EST_PERIOD']}</p></div>
+                            <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Volume Spike</p><p style="margin:0; font-weight:600;">{g['RVOL']}x Avg</p></div>
+                            <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Chart Pattern</p><p style="margin:0; font-weight:600;">{g['PATTERN']}</p></div>
+                            <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Algo Target</p><p style="margin:0; font-weight:600; color:#00FF88;">₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p></div>
+                            <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Hard Stop Loss</p><p style="margin:0; font-weight:600; color:#FF4B4B;">₹{g['STOP_LOSS']:.2f}</p></div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
-                    
-                    render_interactive_chart(dd_sym, "deep_dive")
         else:
             col_dd2.info("Add stocks to this portfolio to unlock Deep Dive.")
             
