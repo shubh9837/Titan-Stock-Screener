@@ -149,6 +149,28 @@ if __name__ == "__main__":
 
                 turnover = avg_vol * curr_p
                 if turnover < 20000000: score -= 30 
+                
+                final_score = max(0, min(100, score))
+
+                # --- THE MISSING GAP: Catalyst & Earnings Filter ---
+                # We only waste API time checking earnings for stocks that are actually actionable
+                earnings_risk = "✅ Clear"
+                if final_score >= 60:
+                    try:
+                        tkr = yf.Ticker(t)
+                        edates = tkr.get_earnings_dates(limit=3)
+                        if edates is not None and not edates.empty:
+                            now = pd.Timestamp.now().tz_localize(None)
+                            # Strip timezone from index for clean comparison
+                            edates.index = edates.index.tz_localize(None)
+                            future_dates = edates[edates.index > now]
+                            if not future_dates.empty:
+                                next_earnings = future_dates.index[0]
+                                days_to_earnings = (next_earnings - now).days
+                                if 0 <= days_to_earnings <= 7:
+                                    earnings_risk = f"⚠️ EARNINGS IN {days_to_earnings}D"
+                    except Exception:
+                        pass # Silently fail if Yahoo Finance data is missing for this specific ticker
 
                 target_price = curr_p + (3 * atr)
                 stop_loss_price = curr_p - (2 * atr)
@@ -158,7 +180,7 @@ if __name__ == "__main__":
                 results.append({
                     "SYMBOL": t.replace(".NS", ""),
                     "PRICE": round(curr_p, 2),
-                    "SCORE": max(0, min(100, score)), 
+                    "SCORE": final_score, 
                     "RSI": round(rsi, 2),
                     "RVOL": round(rvol, 2),
                     "TARGET": round(target_price, 2) if atr > 0 else 0,
@@ -167,7 +189,7 @@ if __name__ == "__main__":
                     "SUPPORT": round(sup_20, 2),
                     "RESISTANCE": round(res_20, 2),
                     "PATTERN": pattern,
-                    "EARNINGS_RISK": "✅ Clear",
+                    "EARNINGS_RISK": earnings_risk,
                     "SECTOR": str(sector_map.get(t, "Unknown")),
                     "INSTITUTIONAL_TREND": weekly_trend,
                     "CAP_CATEGORY": "Large/Mid Cap" if turnover >= 20000000 else "Small/Penny Cap",
