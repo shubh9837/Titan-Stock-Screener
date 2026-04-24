@@ -139,9 +139,9 @@ def get_macro_weather():
             idx_str += f"NIFTY: {nifty_val:.0f} ({nifty_pct:+.2f}%) | " if nifty_val else "NIFTY: Data delayed | "
             idx_str += f"SENSEX: {sensex_val:.0f} ({sensex_pct:+.2f}%)" if sensex_val else "SENSEX: Data delayed"
             
-            if close > ema20: return "🟢 RISK OFF", f"{idx_str}<br><div class='market-expectation'>NIFTY is in a strong uptrend. Safe to deploy full sizes.</div>", "weather-green"
-            elif close > ema50: return "🟡 CAUTION", f"{idx_str}<br><div class='market-expectation'>NIFTY chopping below 20 EMA. Cut position sizes by 50%.</div>", "weather-yellow"
-            else: return "🔴 RISK ON", f"{idx_str}<br><div class='market-expectation'>NIFTY is below 50 EMA. Cash is king. DO NOT take new swing trades.</div>", "weather-red"
+            if close > ema20: return "🟢 RISK OFF (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is in a strong uptrend. Safe to deploy full sizes.</div>", "weather-green"
+            elif close > ema50: return "🟡 CAUTION (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY chopping below 20 EMA. Cut position sizes by 50%.</div>", "weather-yellow"
+            else: return "🔴 RISK ON (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is below 50 EMA. Cash is king. DO NOT take new swing trades.</div>", "weather-red"
     except Exception as e:
         return "🟡 UNKNOWN", "Macro weather currently unavailable due to API limits.", "weather-yellow"
 
@@ -153,10 +153,9 @@ df = load_market_data()
 port_df = load_table('portfolio')
 hist_df = load_table('trade_history')
 
-# BACKWARD COMPATIBILITY: If owner column is missing/empty, default to 'My Portfolio'
+# BACKWARD COMPATIBILITY
 if not port_df.empty and 'owner' not in port_df.columns: port_df['owner'] = "My Portfolio"
 if not port_df.empty: port_df['owner'] = port_df['owner'].fillna("My Portfolio")
-
 if not hist_df.empty and 'owner' not in hist_df.columns: hist_df['owner'] = "My Portfolio"
 if not hist_df.empty: hist_df['owner'] = hist_df['owner'].fillna("My Portfolio")
 
@@ -293,9 +292,8 @@ with tabs[1]:
 # TAB 3: PORTFOLIO MANAGER (Infinite Dynamic Portfolios)
 # ==========================================
 with tabs[2]:
-    # Extract unique owners from the database
     all_owners = port_df['owner'].unique().tolist() if not port_df.empty else []
-    if not all_owners: all_owners = ["My Portfolio"] # Default if entirely empty
+    if not all_owners: all_owners = ["My Portfolio"] 
     
     st.subheader("🏦 Active Portfolios")
     
@@ -379,33 +377,33 @@ with tabs[2]:
             else:
                 st.info(f"No active holdings in {owner}.")
 
-    # 2. DEEP DIVE ANALYSIS SECTION
+    # 2. DEEP DIVE ANALYSIS SECTION (NOW COLLAPSIBLE)
     st.markdown("---")
-    st.subheader("🔍 Deep Dive Analysis")
-    col_dd1, col_dd2 = st.columns(2)
-    dd_owner = col_dd1.selectbox("1. Select Portfolio for Deep Dive", sorted(all_owners))
-    dd_df = port_df[port_df['owner'] == dd_owner] if not port_df.empty else pd.DataFrame()
-    
-    if not dd_df.empty:
-        dd_sym = col_dd2.selectbox("2. Select Holding to Analyze", ["-- Select a holding --"] + sorted(dd_df['symbol'].unique().tolist()))
-        if dd_sym != "-- Select a holding --" and not df.empty:
-            live_data = df[df['SYMBOL'] == dd_sym]
-            if not live_data.empty:
-                g = live_data.iloc[0]
-                st.markdown(f"""
-                <div class="gem-card">
-                    <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Algo Score: {g['SCORE']}/100</span></h3>
-                    <div style="display:flex; justify-content:space-between;">
-                        <p><b>Target:</b> ₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
-                        <p style="color:#FF4B4B;"><b>Stop Loss:</b> ₹{g['STOP_LOSS']:.2f}</p>
-                        <p><b>Pattern:</b> {g['PATTERN']}</p>
-                        <p><b>RVOL:</b> {g['RVOL']}x</p>
+    with st.expander("🔍 Deep Dive Analysis (Click to Expand)", expanded=False):
+        col_dd1, col_dd2 = st.columns(2)
+        dd_owner = col_dd1.selectbox("1. Select Portfolio for Deep Dive", sorted(all_owners))
+        dd_df = port_df[port_df['owner'] == dd_owner] if not port_df.empty else pd.DataFrame()
+        
+        if not dd_df.empty:
+            dd_sym = col_dd2.selectbox("2. Select Holding to Analyze", ["-- Select a holding --"] + sorted(dd_df['symbol'].unique().tolist()))
+            if dd_sym != "-- Select a holding --" and not df.empty:
+                live_data = df[df['SYMBOL'] == dd_sym]
+                if not live_data.empty:
+                    g = live_data.iloc[0]
+                    st.markdown(f"""
+                    <div class="gem-card">
+                        <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Algo Score: {g['SCORE']}/100</span></h3>
+                        <div style="display:flex; justify-content:space-between;">
+                            <p><b>Target:</b> ₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
+                            <p style="color:#FF4B4B;"><b>Stop Loss:</b> ₹{g['STOP_LOSS']:.2f}</p>
+                            <p><b>Pattern:</b> {g['PATTERN']}</p>
+                            <p><b>RVOL:</b> {g['RVOL']}x</p>
+                        </div>
                     </div>
-                </div>
-                """, unsafe_allow_html=True)
-                render_interactive_chart(dd_sym, "deep_dive")
-    else:
-        col_dd2.info("Add stocks to this portfolio to unlock Deep Dive.")
+                    """, unsafe_allow_html=True)
+                    render_interactive_chart(dd_sym, "deep_dive")
+        else:
+            col_dd2.info("Add stocks to this portfolio to unlock Deep Dive.")
 
     # 3. DYNAMIC ADD / SELL CONTROLS
     st.markdown("---")
@@ -413,24 +411,23 @@ with tabs[2]:
     
     with col_add:
         st.markdown("### ➕ Add Trade")
-        # Dynamic owner selection outside the form so the text_input appears instantly
-        add_owner_selection = st.selectbox("Assign to Portfolio", sorted(all_owners) + ["➕ Create New Portfolio..."])
-        
-        if add_owner_selection == "➕ Create New Portfolio...":
-            final_add_owner = st.text_input("Enter New Portfolio Name", "Wife's Portfolio")
-        else:
-            final_add_owner = add_owner_selection
-
         with st.form("add_trade"):
             a_sym = st.selectbox("Stock Symbol", sorted(df['SYMBOL'].unique().tolist()) if not df.empty else [])
             a_price, a_qty = st.number_input("Buy Price", min_value=0.0, format="%.2f"), st.number_input("Quantity", min_value=1, step=1)
             
-            if st.form_submit_button(f"Add to {final_add_owner}") and a_sym and final_add_owner:
-                supabase.table('portfolio').insert({
-                    "symbol": a_sym, "entry_price": a_price, "qty": int(a_qty), 
-                    "date": str(datetime.date.today()), "owner": final_add_owner
-                }).execute()
-                st.rerun()
+            st.markdown("**Assign to Portfolio:**")
+            combo_col1, combo_col2 = st.columns(2)
+            existing_owner = combo_col1.selectbox("Select Existing", ["➕ Create New Portfolio"] + sorted(all_owners))
+            new_owner = combo_col2.text_input("Or Type New Name (If creating new)", placeholder="e.g. Retirement Fund")
+            
+            if st.form_submit_button("Add to Portfolio"):
+                final_add_owner = new_owner.strip() if existing_owner == "➕ Create New Portfolio" else existing_owner
+                if final_add_owner and a_sym:
+                    supabase.table('portfolio').insert({
+                        "symbol": a_sym, "entry_price": a_price, "qty": int(a_qty), 
+                        "date": str(datetime.date.today()), "owner": final_add_owner
+                    }).execute()
+                    st.rerun()
                     
     with col_sell:
         st.markdown("### ➖ Register Sale")
@@ -443,7 +440,6 @@ with tabs[2]:
             s_reason = st.selectbox("Reason for Exit", ["Target Hit (Partial/Runner) 🎯", "Trailing SL Hit 🛡️", "Trend/EMA Broken 📉", "Time Expiration (Dead Money) ⏳", "Cut Losses Early ✂️", "Manual Exit"])
             
             if st.form_submit_button("Execute Sale") and not port_df.empty and s_sym != "No Holdings":
-                # Ensure we grab the holding from the EXACT owner's portfolio
                 holding = port_df[(port_df['symbol'] == s_sym) & (port_df['owner'] == sell_owner)].iloc[0]
                 if s_qty <= int(holding['qty']):
                     supabase.table('trade_history').insert({
