@@ -80,7 +80,6 @@ def get_index_data(ticker_symbol):
         return None, None
     except: return None, None
 
-# BUG FIX: Added strict dynamic keys to prevent Streamlit rendering crashes in loops
 def render_interactive_chart(symbol, unique_key_suffix=""):
     try:
         data = yf.download(f"{symbol}.NS", period="3mo", progress=False, ignore_tz=True)
@@ -96,7 +95,6 @@ def render_interactive_chart(symbol, unique_key_suffix=""):
         fig.add_trace(go.Scatter(x=data.index, y=data['EMA50'], line=dict(color='#FFC107', width=1.5), name='50 EMA'))
         
         fig.update_layout(title=f"{symbol} - Live Technicals", template='plotly_dark', height=400, margin=dict(l=0, r=0, t=40, b=0), xaxis_rangeslider_visible=False)
-        
         st.plotly_chart(fig, use_container_width=True, key=f"chart_{symbol}_{unique_key_suffix}")
     except Exception as e:
         st.error("Could not load chart.")
@@ -141,9 +139,9 @@ def get_macro_weather():
             idx_str += f"NIFTY: {nifty_val:.0f} ({nifty_pct:+.2f}%) | " if nifty_val else "NIFTY: Data delayed | "
             idx_str += f"SENSEX: {sensex_val:.0f} ({sensex_pct:+.2f}%)" if sensex_val else "SENSEX: Data delayed"
             
-            if close > ema20: return "🟢 RISK OFF (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is in a strong uptrend. Safe to deploy full sizes.</div>", "weather-green"
+            if close > ema20: return "🟢 RISK ON (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is in a strong uptrend. Safe to deploy full sizes.</div>", "weather-green"
             elif close > ema50: return "🟡 CAUTION (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY chopping below 20 EMA. Cut position sizes by 50%.</div>", "weather-yellow"
-            else: return "🔴 RISK ON (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is below 50 EMA. Cash is king. DO NOT take new swing trades.</div>", "weather-red"
+            else: return "🔴 RISK OFF (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is below 50 EMA. Cash is king. DO NOT take new swing trades.</div>", "weather-red"
     except Exception as e:
         return "🟡 UNKNOWN", "Macro weather currently unavailable due to API limits.", "weather-yellow"
 
@@ -154,6 +152,13 @@ def load_table(table_name):
 df = load_market_data()
 port_df = load_table('portfolio')
 hist_df = load_table('trade_history')
+
+# BACKWARD COMPATIBILITY: If owner column is missing/empty, default to 'My Portfolio'
+if not port_df.empty and 'owner' not in port_df.columns: port_df['owner'] = "My Portfolio"
+if not port_df.empty: port_df['owner'] = port_df['owner'].fillna("My Portfolio")
+
+if not hist_df.empty and 'owner' not in hist_df.columns: hist_df['owner'] = "My Portfolio"
+if not hist_df.empty: hist_df['owner'] = hist_df['owner'].fillna("My Portfolio")
 
 # --- SIDEBAR & HEADER ---
 with st.sidebar:
@@ -222,7 +227,6 @@ with tabs[0]:
             if not filtered_df.empty:
                 render_interactive_chart(search_q, "screener")
                 
-        # BUG FIX: Safely match partial string to avoid space/unicode issues
         if show_alpha: filtered_df = filtered_df[filtered_df['VERDICT'].str.contains('💎', na=False)]
         
         st.markdown("---")
@@ -247,22 +251,9 @@ with tabs[0]:
         with st.expander("📖 Comprehensive Dictionary: Candlesticks & Trading Actionables"):
             st.markdown("""
             ### 🕯️ Candlestick Patterns Decoded
-            The algorithm reads price action to assign a label. Here is exactly what to do when you see them:
-            
-            **1. ⚡ Pre-Breakout Squeeze**
-            * **Meaning:** The stock's volatility is dead (Bollinger Bands are pinching tight). It is resting just below a major ceiling (Resistance). A violent move is loading.
-            * **Actionable:** Do NOT buy immediately. Set a price alert on your broker at the exact `Resistance` price. If it crosses that price at 2:00 PM with volume, buy.
-            
-            **2. 🟢 Bullish Engulfing**
-            * **Meaning:** The green candle body completely swallowed yesterday's red candle. Institutional buyers stepped in forcefully to stop the stock from falling further.
-            * **Actionable:** This is a strong reversal signal. If the `Score` is above 70, this is a safe entry point. Place your Stop Loss exactly below yesterday's low.
-            
-            **3. Uptrending / Consolidating**
-            * **Meaning:** The stock is behaving normally within its mathematical averages. No sudden shocks.
-            * **Actionable:** Buy near the `Support` price. Sell near the `Target`. 
-            
-            ### ⏳ Intraday vs. Swing Trading
-            * **Do NOT close these trades on the same day.** If an alert triggers at 2:00 PM, you are buying the *ignition* of a move. These setups are designed to be held for **3 to 15 days** (Swing Trading) to let the trend play out fully. Let the Trailing Stop Loss manage your exit.
+            **1. ⚡ Pre-Breakout Squeeze:** Volatility is dead. A violent move is loading. Set a price alert at `Resistance`. Buy if crossed at 2:00 PM.
+            **2. 🟢 Bullish Engulfing:** Strong reversal signal. Buy if score is high. Place Stop Loss below yesterday's low.
+            **3. Uptrending / Consolidating:** Behaving normally. Buy near `Support`, Sell near `Target`. 
             """)
 
 # ==========================================
@@ -271,7 +262,7 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("⚡ Imminent Pre-Breakouts (> 50 Score)")
     if not df.empty:
-        breakouts = df[(df['PATTERN'] == '⚡ Pre-Breakout Squeeze') & (df['SCORE'] > 50)]
+        breakouts = df[(df['PATTERN'].str.contains('Squeeze', na=False)) & (df['SCORE'] > 50)]
         if not breakouts.empty:
             render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'EST_PERIOD', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
             
@@ -299,121 +290,173 @@ with tabs[1]:
             st.info("No imminent high-quality breakouts detected today.")
 
 # ==========================================
-# TAB 3: PORTFOLIO MANAGER (Smart Time Stop & Scale-Out Engine)
+# TAB 3: PORTFOLIO MANAGER (Infinite Dynamic Portfolios)
 # ==========================================
 with tabs[2]:
-    if not port_df.empty:
-        st.subheader("🏦 Portfolio Summary & Dynamic Health")
-        port_calc = []
-        for _, row in port_df.iterrows():
-            sym = row['symbol']
-            live_data = df[df['SYMBOL'] == sym] if not df.empty and 'SYMBOL' in df.columns else pd.DataFrame()
-                
-            cmp = float(live_data.iloc[0]['PRICE']) if not live_data.empty else float(row['entry_price'])
-            target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
-            entry = float(row['entry_price'])
-            
-            # --- Extract Live Momentum Metrics for Smart Time Stop ---
-            curr_score = float(live_data.iloc[0]['SCORE']) if not live_data.empty else 0
-            curr_rvol = float(live_data.iloc[0]['RVOL']) if not live_data.empty else 0
-            
-            # --- Time Stop & Opportunity Cost Engine ---
-            try:
-                entry_date = pd.to_datetime(row['date']).date()
-                days_held = (datetime.date.today() - entry_date).days
-                
-                est_period = live_data.iloc[0]['EST_PERIOD'] if not live_data.empty else "15-30 Days"
-                max_days = int(est_period.split('-')[1].split(' ')[0])
-            except:
-                days_held = 0
-                max_days = 30 
-            
-            health_status = "🟢 Healthy Uptrend"
-            if not live_data.empty:
-                pattern = live_data.iloc[0]['PATTERN']
-                if curr_score < 40: health_status = "🔴 Momentum Dead (Consider Exit)"
-                elif "Consolidating" in pattern: health_status = "🟡 Choppy/Sideways"
+    # Extract unique owners from the database
+    all_owners = port_df['owner'].unique().tolist() if not port_df.empty else []
+    if not all_owners: all_owners = ["My Portfolio"] # Default if entirely empty
+    
+    st.subheader("🏦 Active Portfolios")
+    
+    # 1. DYNAMIC EXPANDERS FOR ALL PORTFOLIOS
+    for owner in sorted(all_owners):
+        active_port = port_df[port_df['owner'] == owner] if not port_df.empty else pd.DataFrame()
+        
+        with st.expander(f"💼 {owner} Summary & Holdings", expanded=True):
+            if not active_port.empty:
+                port_calc = []
+                for _, row in active_port.iterrows():
+                    sym = row['symbol']
+                    live_data = df[df['SYMBOL'] == sym] if not df.empty and 'SYMBOL' in df.columns else pd.DataFrame()
+                        
+                    cmp = float(live_data.iloc[0]['PRICE']) if not live_data.empty else float(row['entry_price'])
+                    target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
+                    entry = float(row['entry_price'])
+                    
+                    curr_score = float(live_data.iloc[0]['SCORE']) if not live_data.empty else 0
+                    curr_rvol = float(live_data.iloc[0]['RVOL']) if not live_data.empty else 0
+                    
+                    try:
+                        entry_date = pd.to_datetime(row['date']).date()
+                        days_held = (datetime.date.today() - entry_date).days
+                        est_period = live_data.iloc[0]['EST_PERIOD'] if not live_data.empty else "15-30 Days"
+                        max_days = int(est_period.split('-')[1].split(' ')[0])
+                    except:
+                        days_held = 0
+                        max_days = 30 
+                    
+                    health_status = "🟢 Healthy Uptrend"
+                    if not live_data.empty:
+                        pattern = live_data.iloc[0]['PATTERN']
+                        if curr_score < 40: health_status = "🔴 Momentum Dead (Consider Exit)"
+                        elif "Consolidating" in pattern: health_status = "🟡 Choppy/Sideways"
 
-            algo_sl = float(live_data.iloc[0]['STOP_LOSS']) if not live_data.empty else (entry * 0.90)
-            if cmp >= (entry * 1.10): trailing_sl = entry * 1.05 
-            elif cmp >= (entry * 1.05): trailing_sl = entry 
-            else: trailing_sl = algo_sl
-            
-            qty = int(row['qty'])
-            invested = entry * qty
-            cur_val = cmp * qty
-            target_val = target * qty 
-            pnl_perc = ((cmp - entry) / entry) * 100
-            
-            # --- UPGRADED "SCALE-OUT & SMART TIME STOP" EXIT LOGIC ---
-            if cmp <= trailing_sl or "Dead" in health_status:
-                action = "🚨 EXIT FULL (SL/Trend Broken)"
-            elif cmp >= target:
-                action = "🎯 TARGET HIT: Sell 50%, Trail Rest"
-            elif days_held > max_days:
-                if curr_score >= 65 or curr_rvol >= 1.2:
-                    action = f"🔥 LATE BLOOMER (Held {days_held}d) - Momentum Detected"
-                else:
-                    action = f"⏳ TIME STOP (Held {days_held}d) - Dead Money"
+                    algo_sl = float(live_data.iloc[0]['STOP_LOSS']) if not live_data.empty else (entry * 0.90)
+                    if cmp >= (entry * 1.10): trailing_sl = entry * 1.05 
+                    elif cmp >= (entry * 1.05): trailing_sl = entry 
+                    else: trailing_sl = algo_sl
+                    
+                    qty = int(row['qty'])
+                    invested = entry * qty
+                    cur_val = cmp * qty
+                    target_val = target * qty 
+                    pnl_perc = ((cmp - entry) / entry) * 100
+                    
+                    if cmp <= trailing_sl or "Dead" in health_status:
+                        action = "🚨 EXIT FULL (SL/Trend Broken)"
+                    elif cmp >= target:
+                        action = "🎯 TARGET HIT: Sell 50%, Trail Rest"
+                    elif days_held > max_days:
+                        if curr_score >= 65 or curr_rvol >= 1.2:
+                            action = f"🔥 LATE BLOOMER (Held {days_held}d) - Momentum Detected"
+                        else:
+                            action = f"⏳ TIME STOP (Held {days_held}d) - Dead Money"
+                    else:
+                        action = "⏳ HOLD"
+                    
+                    port_calc.append({
+                        "Action": action, "Symbol": sym, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
+                        "Health Status": health_status, "P&L (%)": pnl_perc, "Target": target, "Trailing SL": trailing_sl,
+                        "Days Held": days_held, "Invested (₹)": invested, "Current (₹)": cur_val
+                    })
+                    
+                pdf = pd.DataFrame(port_calc)
+                t_inv, t_cur = pdf['Invested (₹)'].sum(), pdf['Current (₹)'].sum()
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("💰 Total Invested", f"₹{t_inv:,.2f}")
+                c2.metric("📈 Current Value", f"₹{t_cur:,.2f}", f"₹{t_cur - t_inv:,.2f}")
+                c3.metric("🎯 Net P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
+                
+                def style_pnl(val):
+                    if pd.isna(val) or isinstance(val, str): return ''
+                    return f"color: {'#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'}"
+                    
+                st.dataframe(pdf.drop(columns=['Invested (₹)', 'Current (₹)']).style.format({
+                    "Avg Price": "{:.2f}", "CMP": "{:.2f}", "P&L (%)": "{:.2f}%", "Target": "{:.2f}", "Trailing SL": "{:.2f}"
+                }).map(style_pnl, subset=['P&L (%)']), use_container_width=True, hide_index=True)
             else:
-                action = "⏳ HOLD"
-            
-            port_calc.append({
-                "Action": action, "Symbol": sym, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
-                "Health Status": health_status, "P&L (%)": pnl_perc, "Target": target, "Trailing SL": trailing_sl,
-                "Days Held": days_held,
-                "Invested (₹)": invested, "Current (₹)": cur_val
-            })
-            
-        pdf = pd.DataFrame(port_calc)
-        t_inv, t_cur = pdf['Invested (₹)'].sum(), pdf['Current (₹)'].sum()
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric("💰 Total Invested", f"₹{t_inv:,.2f}")
-        c2.metric("📈 Current Value", f"₹{t_cur:,.2f}", f"₹{t_cur - t_inv:,.2f}")
-        c3.metric("🎯 Net P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
-        
-        st.markdown("---")
-        def style_pnl(val):
-            if pd.isna(val) or isinstance(val, str): return ''
-            return f"color: {'#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'}"
-            
-        st.dataframe(pdf.drop(columns=['Invested (₹)', 'Current (₹)']).style.format({
-            "Avg Price": "{:.2f}", "CMP": "{:.2f}", "P&L (%)": "{:.2f}%", "Target": "{:.2f}", "Trailing SL": "{:.2f}"
-        }).map(style_pnl, subset=['P&L (%)']), use_container_width=True, hide_index=True)
+                st.info(f"No active holdings in {owner}.")
 
-    else: 
-        st.info("🏦 Portfolio is empty.")
+    # 2. DEEP DIVE ANALYSIS SECTION
+    st.markdown("---")
+    st.subheader("🔍 Deep Dive Analysis")
+    col_dd1, col_dd2 = st.columns(2)
+    dd_owner = col_dd1.selectbox("1. Select Portfolio for Deep Dive", sorted(all_owners))
+    dd_df = port_df[port_df['owner'] == dd_owner] if not port_df.empty else pd.DataFrame()
+    
+    if not dd_df.empty:
+        dd_sym = col_dd2.selectbox("2. Select Holding to Analyze", ["-- Select a holding --"] + sorted(dd_df['symbol'].unique().tolist()))
+        if dd_sym != "-- Select a holding --" and not df.empty:
+            live_data = df[df['SYMBOL'] == dd_sym]
+            if not live_data.empty:
+                g = live_data.iloc[0]
+                st.markdown(f"""
+                <div class="gem-card">
+                    <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Algo Score: {g['SCORE']}/100</span></h3>
+                    <div style="display:flex; justify-content:space-between;">
+                        <p><b>Target:</b> ₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
+                        <p style="color:#FF4B4B;"><b>Stop Loss:</b> ₹{g['STOP_LOSS']:.2f}</p>
+                        <p><b>Pattern:</b> {g['PATTERN']}</p>
+                        <p><b>RVOL:</b> {g['RVOL']}x</p>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                render_interactive_chart(dd_sym, "deep_dive")
+    else:
+        col_dd2.info("Add stocks to this portfolio to unlock Deep Dive.")
 
+    # 3. DYNAMIC ADD / SELL CONTROLS
     st.markdown("---")
     col_add, col_sell = st.columns(2)
+    
     with col_add:
+        st.markdown("### ➕ Add Trade")
+        # Dynamic owner selection outside the form so the text_input appears instantly
+        add_owner_selection = st.selectbox("Assign to Portfolio", sorted(all_owners) + ["➕ Create New Portfolio..."])
+        
+        if add_owner_selection == "➕ Create New Portfolio...":
+            final_add_owner = st.text_input("Enter New Portfolio Name", "Wife's Portfolio")
+        else:
+            final_add_owner = add_owner_selection
+
         with st.form("add_trade"):
-            a_sym = st.selectbox("➕ Add Stock Symbol", sorted(df['SYMBOL'].unique().tolist()) if not df.empty else [])
+            a_sym = st.selectbox("Stock Symbol", sorted(df['SYMBOL'].unique().tolist()) if not df.empty else [])
             a_price, a_qty = st.number_input("Buy Price", min_value=0.0, format="%.2f"), st.number_input("Quantity", min_value=1, step=1)
-            if st.form_submit_button("Add to Portfolio") and a_sym:
-                supabase.table('portfolio').insert({"symbol": a_sym, "entry_price": a_price, "qty": int(a_qty), "date": str(datetime.date.today())}).execute()
+            
+            if st.form_submit_button(f"Add to {final_add_owner}") and a_sym and final_add_owner:
+                supabase.table('portfolio').insert({
+                    "symbol": a_sym, "entry_price": a_price, "qty": int(a_qty), 
+                    "date": str(datetime.date.today()), "owner": final_add_owner
+                }).execute()
                 st.rerun()
                     
     with col_sell:
+        st.markdown("### ➖ Register Sale")
+        sell_owner = st.selectbox("Select Portfolio to Sell From", sorted(all_owners))
+        sell_holdings = port_df[port_df['owner'] == sell_owner]['symbol'].unique().tolist() if not port_df.empty else []
+        
         with st.form("sell_trade"):
-            s_sym = st.selectbox("➖ Register Sale", port_df['symbol'].unique() if not port_df.empty else [])
+            s_sym = st.selectbox("Stock to Sell", sell_holdings if sell_holdings else ["No Holdings"])
             s_price, s_qty = st.number_input("Sell Price", min_value=0.0, format="%.2f"), st.number_input("Qty to Sell", min_value=1, step=1)
             s_reason = st.selectbox("Reason for Exit", ["Target Hit (Partial/Runner) 🎯", "Trailing SL Hit 🛡️", "Trend/EMA Broken 📉", "Time Expiration (Dead Money) ⏳", "Cut Losses Early ✂️", "Manual Exit"])
             
-            if st.form_submit_button("Execute Sale") and not port_df.empty:
-                holding = port_df[port_df['symbol'] == s_sym].iloc[0]
+            if st.form_submit_button("Execute Sale") and not port_df.empty and s_sym != "No Holdings":
+                # Ensure we grab the holding from the EXACT owner's portfolio
+                holding = port_df[(port_df['symbol'] == s_sym) & (port_df['owner'] == sell_owner)].iloc[0]
                 if s_qty <= int(holding['qty']):
                     supabase.table('trade_history').insert({
                         "symbol": s_sym, "sell_price": float(s_price), "qty_sold": int(s_qty), "buy_price": float(holding['entry_price']),
                         "realized_pl": float((s_price - holding['entry_price']) * s_qty), "pl_percentage": float(((s_price - holding['entry_price'])/holding['entry_price'])*100), 
-                        "sell_date": str(datetime.date.today()), "exit_reason": s_reason
+                        "sell_date": str(datetime.date.today()), "exit_reason": s_reason, "owner": sell_owner
                     }).execute()
                     
                     new_qty = int(holding['qty']) - int(s_qty)
                     if new_qty == 0: supabase.table('portfolio').delete().eq('id', holding['id']).execute()
                     else: supabase.table('portfolio').update({"qty": new_qty}).eq('id', holding['id']).execute()
                     st.rerun()
+
 # ==========================================
 # TAB 4: SWING GEMS
 # ==========================================
@@ -421,8 +464,6 @@ with tabs[3]:
     st.subheader("💎 Institutional Swing Gems")
     if not df.empty:
         inst_df = df[df['CAP_CATEGORY'] != "Small/Penny Cap"]
-        
-        # BUG FIX: Safe string match for Alpha Gems
         alpha_gems = inst_df[inst_df['VERDICT'].str.contains('💎', na=False)].sort_values("SCORE", ascending=False).head(10)
         
         if not alpha_gems.empty:
@@ -480,22 +521,26 @@ with tabs[4]:
             st.markdown("""
             ### 🚨 The Reality of Micro-Caps
             Penny stocks do not usually move based on fundamentals or retail buying. They move because **Operators (Whales)** accumulate them quietly and then create artificial volume to trap retail traders.
-            
             * **Volume is Everything:** Never buy a penny stock that is quietly consolidating. Only enter when you see an explosive Volume Spike (`RVOL` > 2.0x).
             * **The Hit & Run Rule:** Do not marry penny stocks. If you get a 15% to 20% pop, secure your profits immediately. 
-            * **The 5% Rule:** Penny stocks can gap down violently overnight. Never allocate more than 5% of your total trading capital to a single penny stock.
-            * **Respect the Stop Loss:** If a penny stock loses its technical support, the operators have abandoned it. Sell instantly without hesitation.
+            * **The 5% Rule:** Penny stocks can gap down violently overnight. Never allocate more than 5% of your total capital to a single penny stock.
             """)
 
 # ==========================================
 # TAB 6: HISTORY (Advanced Analytics)
 # ==========================================
 with tabs[5]:
-    st.subheader("🏆 Institutional Performance & Graveyard")
-    if not hist_df.empty:
-        total_trades = len(hist_df)
-        wins = hist_df[hist_df['realized_pl'] > 0]
-        losses = hist_df[hist_df['realized_pl'] <= 0]
+    hist_owners = hist_df['owner'].unique().tolist() if not hist_df.empty else []
+    if not hist_owners: hist_owners = ["My Portfolio"]
+    
+    owner_choice_hist = st.selectbox("👤 Select Account History", sorted(hist_owners))
+    active_hist = hist_df[hist_df['owner'] == owner_choice_hist] if not hist_df.empty else pd.DataFrame()
+
+    st.subheader(f"🏆 {owner_choice_hist} Performance & Graveyard")
+    if not active_hist.empty:
+        total_trades = len(active_hist)
+        wins = active_hist[active_hist['realized_pl'] > 0]
+        losses = active_hist[active_hist['realized_pl'] <= 0]
         
         win_rate = (len(wins) / total_trades) * 100
         avg_win = wins['pl_percentage'].mean() if not wins.empty else 0
@@ -509,10 +554,10 @@ with tabs[5]:
         c4.metric("Profit Factor", f"{profit_factor:.2f}")
 
         st.markdown("---")
-        if 'exit_reason' not in hist_df.columns: hist_df['exit_reason'] = "N/A"
+        if 'exit_reason' not in active_hist.columns: active_hist['exit_reason'] = "N/A"
         
-        st.dataframe(hist_df[['symbol', 'buy_price', 'sell_price', 'pl_percentage', 'realized_pl', 'exit_reason', 'sell_date']].style.format({
+        st.dataframe(active_hist[['symbol', 'buy_price', 'sell_price', 'pl_percentage', 'realized_pl', 'exit_reason', 'sell_date']].style.format({
             "sell_price": "{:.2f}", "buy_price": "{:.2f}", "realized_pl": "{:.2f}", "pl_percentage": "{:.2f}%"
         }), use_container_width=True, hide_index=True)
     else:
-        st.info("No trade history available yet.")
+        st.info(f"No trade history available yet for {owner_choice_hist}.")
