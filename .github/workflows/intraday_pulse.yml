@@ -1,7 +1,17 @@
-name: 15-Min Live Market Pulse
+name: Stealth Intraday Pulse (45m)
+
 on:
   schedule:
-    - cron: '*/05 3-10 * * 1-5' # Runs every 15 minutes during market hours
+    - cron: '45 3 * * 1-5'  # 1. 9:15 AM IST (Market Open / Gap-Down Check)
+    - cron: '30 4 * * 1-5'  # 2. 10:00 AM IST (Morning Volatility Settled)
+    - cron: '15 5 * * 1-5'  # 3. 10:45 AM IST
+    - cron: '0 6 * * 1-5'   # 4. 11:30 AM IST
+    - cron: '45 6 * * 1-5'  # 5. 12:15 PM IST (Mid-Day Check)
+    - cron: '30 7 * * 1-5'  # 6. 1:00 PM IST 
+    - cron: '15 8 * * 1-5'  # 7. 1:45 PM IST (Pre-Ignition Setup)
+    - cron: '55 8 * * 1-5'  # 8. 2:25 PM IST (Post-Ignition Capture)
+    - cron: '45 9 * * 1-5'  # 9. 3:15 PM IST (Pre-Close / Profit Lock)
+
   workflow_dispatch:
 
 jobs:
