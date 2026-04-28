@@ -395,7 +395,7 @@ with tabs[2]:
                     return f"color: {'#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'}"
                     
                 st.dataframe(pdf.drop(columns=['Invested (₹)', 'Current (₹)']).style.format({
-                    "Avg Price": "{:.2f}", "CMP": "{:.2f}", "P&L (%)": "{:.2f}%", "Target": "{:.2f}", "Trailing SL": "{:.2f}", "Profit/ Loss": "{:.2f}"
+                    "Avg Price": "{:.2f}", "CMP": "{:.2f}", "P&L (%)": "{:.1f}%", "Target": "{:.2f}", "Trailing SL": "{:.2f}", "Profit/ Loss": "{:.0f}"
                 }).map(style_pnl, subset=['P&L (%)']), use_container_width=True, hide_index=True)
             else:
                 st.info(f"No active holdings in {owner}.")
