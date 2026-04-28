@@ -362,6 +362,7 @@ with tabs[2]:
                     cur_val = cmp * qty
                     target_val = target * qty 
                     pnl_perc = ((cmp - entry) / entry) * 100
+                    cur_profit = qty * (cmp - entry)
                     
                     if cmp <= trailing_sl or "Dead" in health_status:
                         action = "🚨 EXIT FULL (SL/Trend Broken)"
@@ -377,7 +378,7 @@ with tabs[2]:
                     
                     port_calc.append({
                         "Action": action, "Symbol": sym, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
-                        "Health Status": health_status, "P&L (%)": pnl_perc, "Target": target, "Trailing SL": trailing_sl,
+                        "Health Status": health_status, "P&L (%)": pnl_perc, "Profit/ Loss": cur_profit, "Target": target, "Trailing SL": trailing_sl,
                         "Days Held": days_held, "Invested (₹)": invested, "Current (₹)": cur_val
                     })
                     
