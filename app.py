@@ -553,37 +553,88 @@ with tabs[4]:
             """)
 
 # ==========================================
-# TAB 6: HISTORY (Advanced Analytics)
+# TAB 6: HISTORY (Advanced Analytics & Time Insights)
 # ==========================================
 with tabs[5]:
     hist_owners = hist_df['owner'].unique().tolist() if not hist_df.empty else []
     if not hist_owners: hist_owners = ["My Portfolio"]
     
-    owner_choice_hist = st.selectbox("👤 Select Account History", sorted(hist_owners))
+    col_hist_1, col_hist_2 = st.columns([1, 1])
+    owner_choice_hist = col_hist_1.selectbox("👤 Select Account History", sorted(hist_owners))
     active_hist = hist_df[hist_df['owner'] == owner_choice_hist] if not hist_df.empty else pd.DataFrame()
 
     st.subheader(f"🏆 {owner_choice_hist} Performance & Graveyard")
+    
     if not active_hist.empty:
-        total_trades = len(active_hist)
-        wins = active_hist[active_hist['realized_pl'] > 0]
-        losses = active_hist[active_hist['realized_pl'] <= 0]
+        # 1. Clean Dates for accurate filtering
+        active_hist['sell_date'] = pd.to_datetime(active_hist['sell_date']).dt.date
+        today = datetime.date.today()
         
-        win_rate = (len(wins) / total_trades) * 100
-        avg_win = wins['pl_percentage'].mean() if not wins.empty else 0
-        avg_loss = losses['pl_percentage'].mean() if not losses.empty else 0
-        profit_factor = abs(wins['realized_pl'].sum() / losses['realized_pl'].sum()) if not losses.empty else 10.0
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Win Rate", f"{win_rate:.1f}%")
-        c2.metric("Avg Win", f"{avg_win:+.1f}%")
-        c3.metric("Avg Loss", f"{avg_loss:.1f}%")
-        c4.metric("Profit Factor", f"{profit_factor:.2f}")
-
-        st.markdown("---")
-        if 'exit_reason' not in active_hist.columns: active_hist['exit_reason'] = "N/A"
+        # 2. Dynamic Time Filter UI
+        time_filter = col_hist_2.selectbox("📅 Select Time Period", ["All Time", "Today", "This Week (WTD)", "This Month (MTD)", "Financial Year (FYTD)", "Custom Date Range"])
         
-        st.dataframe(active_hist[['symbol', 'buy_price', 'sell_price', 'pl_percentage', 'realized_pl', 'exit_reason', 'sell_date']].style.format({
-            "sell_price": "{:.2f}", "buy_price": "{:.2f}", "realized_pl": "{:.2f}", "pl_percentage": "{:.2f}%"
-        }), use_container_width=True, hide_index=True)
+        start_date, end_date = None, None
+        
+        if time_filter == "Today":
+            start_date, end_date = today, today
+        elif time_filter == "This Week (WTD)":
+            start_date = today - datetime.timedelta(days=today.weekday())
+            end_date = today
+        elif time_filter == "This Month (MTD)":
+            start_date = today.replace(day=1)
+            end_date = today
+        elif time_filter == "Financial Year (FYTD)":
+            # Indian FY starts April 1st
+            fy_start_year = today.year if today.month >= 4 else today.year - 1
+            start_date = datetime.date(fy_start_year, 4, 1)
+            end_date = today
+        elif time_filter == "Custom Date Range":
+            dates = st.date_input("Select Start and End Date", [today - datetime.timedelta(days=30), today])
+            if len(dates) == 2:
+                start_date, end_date = dates
+                
+        # 3. Apply the Filter
+        filtered_hist = active_hist.copy()
+        if start_date and end_date:
+            filtered_hist = filtered_hist[(filtered_hist['sell_date'] >= start_date) & (filtered_hist['sell_date'] <= end_date)]
+            
+        # 4. Calculate Dynamic Metrics
+        if not filtered_hist.empty:
+            total_trades = len(filtered_hist)
+            wins = filtered_hist[filtered_hist['realized_pl'] > 0]
+            losses = filtered_hist[filtered_hist['realized_pl'] <= 0]
+            
+            net_profit = filtered_hist['realized_pl'].sum()
+            win_rate = (len(wins) / total_trades) * 100
+            avg_win = wins['pl_percentage'].mean() if not wins.empty else 0
+            avg_loss = losses['pl_percentage'].mean() if not losses.empty else 0
+            
+            gross_wins = wins['realized_pl'].sum()
+            gross_losses = abs(losses['realized_pl'].sum())
+            profit_factor = (gross_wins / gross_losses) if gross_losses > 0 else (10.0 if gross_wins > 0 else 0)
+
+            # 5. Render Metric Cards
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("💰 Net Profit", f"₹{net_profit:,.2f}")
+            c2.metric("🎯 Win Rate", f"{win_rate:.1f}%", f"{total_trades} Trades")
+            c3.metric("📈 Avg Win", f"{avg_win:+.2f}%")
+            c4.metric("📉 Avg Loss", f"{avg_loss:.2f}%")
+            c5.metric("⚖️ Profit Factor", f"{profit_factor:.2f}")
+
+            st.markdown("---")
+            if 'exit_reason' not in filtered_hist.columns: filtered_hist['exit_reason'] = "N/A"
+            
+            # Helper to color code the P&L column in the dataframe
+            def style_realized_pl(val):
+                if pd.isna(val): return ''
+                return f"color: {'#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'}"
+
+            # 6. Render Dataframe
+            st.dataframe(filtered_hist[['symbol', 'buy_price', 'sell_price', 'pl_percentage', 'realized_pl', 'exit_reason', 'sell_date']].sort_values(by='sell_date', ascending=False).style.format({
+                "sell_price": "{:.2f}", "buy_price": "{:.2f}", "realized_pl": "{:.2f}", "pl_percentage": "{:.2f}%"
+            }).map(style_realized_pl, subset=['realized_pl']), use_container_width=True, hide_index=True)
+            
+        else:
+            st.info(f"No trades closed during the selected period ({time_filter}).")
     else:
         st.info(f"No trade history available yet for {owner_choice_hist}.")
