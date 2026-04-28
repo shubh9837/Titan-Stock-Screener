@@ -377,7 +377,7 @@ with tabs[2]:
                         action = "⏳ HOLD"
                     
                     port_calc.append({
-                        "Action": action, "Score": Score, "Symbol": sym, "Health Status": health_status, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
+                        "Action": action, "Score": {g['SCORE']}, "Symbol": sym, "Health Status": health_status, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
                         "P&L (%)": pnl_perc, "Profit/ Loss": cur_profit, "Target": target, "Trailing SL": trailing_sl,
                         "Days Held": days_held, "Invested (₹)": invested, "Current (₹)": cur_val
                     })
