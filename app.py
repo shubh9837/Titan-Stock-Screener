@@ -386,8 +386,8 @@ with tabs[2]:
                 t_inv, t_cur = pdf['Invested (₹)'].sum(), pdf['Current (₹)'].sum()
                 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("💰 Total Invested", f"₹{t_inv:,.2f}")
-                c2.metric("📈 Current Value", f"₹{t_cur:,.2f}", f"₹{t_cur - t_inv:,.2f}")
+                c1.metric("💰 Total Invested", f"₹{t_inv:,.0f}")
+                c2.metric("📈 Current Value", f"₹{t_cur:,.0f}", f"₹{t_cur - t_inv:,.0f}")
                 c3.metric("🎯 Net P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
                 
                 def style_pnl(val):
