@@ -134,9 +134,9 @@ def get_macro_weather():
             css_class = "weather-green" if direction > 0.2 else "weather-red" if direction < -0.2 else "weather-yellow"
             
             msg = "<b>Live Global Cues:</b> "
-            msg += f"GIFT Nifty: {gift:.0f} ({gift_pct:+.2f}%) | " if gift else ""
-            msg += f"S&P 500: {sp500:.0f} ({sp_pct:+.2f}%) | " if sp500 else ""
-            msg += f"Nikkei: {nikkei:.0f} ({nik_pct:+.2f}%)" if nikkei else ""
+            msg += f"GIFT Nifty: {gift:.0f} ({gift_pct:+.1f}%) | " if gift else ""
+            msg += f"S&P 500: {sp500:.0f} ({sp_pct:+.1f}%) | " if sp500 else ""
+            msg += f"Nikkei: {nikkei:.0f} ({nik_pct:+.1f}%)" if nikkei else ""
             
             expectation = "📈 Expectation: Strong Gap-Up opening." if direction > 0.4 else "↗️ Expectation: Mildly positive opening." if direction > 0.1 else "📉 Expectation: Heavy Gap-Down opening." if direction < -0.4 else "↘️ Expectation: Mildly negative opening." if direction < -0.1 else "⚖️ Expectation: Flat opening expected."
             msg += f"<div class='market-expectation'>{expectation}</div>"
@@ -155,8 +155,8 @@ def get_macro_weather():
             ema50 = close_series.ewm(span=50, adjust=False).mean().iloc[-1]
             
             idx_str = "<b>Live Indices (1-Min Delay):</b> "
-            idx_str += f"NIFTY: {nifty_val:.0f} ({nifty_pct:+.2f}%) | " if nifty_val else "NIFTY: Data delayed | "
-            idx_str += f"SENSEX: {sensex_val:.0f} ({sensex_pct:+.2f}%)" if sensex_val else "SENSEX: Data delayed"
+            idx_str += f"NIFTY: {nifty_val:.0f} ({nifty_pct:+.1f}%) | " if nifty_val else "NIFTY: Data delayed | "
+            idx_str += f"SENSEX: {sensex_val:.0f} ({sensex_pct:+.1f}%)" if sensex_val else "SENSEX: Data delayed"
             
             if close > ema20: return "🟢 RISK OFF (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY is in a strong uptrend. Safe to deploy full sizes.</div>", "weather-green"
             elif close > ema50: return "🟡 CAUTION (Live Market)", f"{idx_str}<br><div class='market-expectation'>NIFTY chopping below 20 EMA. Cut position sizes by 50%.</div>", "weather-yellow"
@@ -209,14 +209,15 @@ def render_df_with_progress(data, cols_to_show):
     st.dataframe(
         data[cols_to_show].sort_values("SCORE", ascending=False),
         column_config={
-            "SCORE": st.column_config.ProgressColumn("Score (0-100)", format="%f", min_value=0, max_value=100),
-            "PRICE": st.column_config.NumberColumn("CMP (₹)", format="%.2f"),
-            "TARGET": st.column_config.NumberColumn("Target (₹)", format="%.2f"),
-            "UPSIDE_%": st.column_config.NumberColumn("Upside %", format="%.2f%%"),
-            "RR_RATIO": st.column_config.NumberColumn("R:R Ratio", format="1:%.2f"),
-            "SUPPORT": st.column_config.NumberColumn("Support", format="%.2f"),
-            "RESISTANCE": st.column_config.NumberColumn("Resistance", format="%.2f"),
+            "SCORE": st.column_config.ProgressColumn("Score (0-100)", format="%.1f", min_value=0, max_value=100),
+            "PRICE": st.column_config.NumberColumn("CMP (₹)", format="%.1f"),
+            "TARGET": st.column_config.NumberColumn("Target (₹)", format="%.1f"),
+            "UPSIDE_%": st.column_config.NumberColumn("Upside %", format="%.1f%%"),
+            "RR_RATIO": st.column_config.NumberColumn("R:R Ratio", format="1:%.1f"),
+            "SUPPORT": st.column_config.NumberColumn("Support", format="%.1f"),
+            "RESISTANCE": st.column_config.NumberColumn("Resistance", format="%.1f"),
             "RVOL": st.column_config.NumberColumn("Vol Spike", format="%.1fx"),
+            "DIST_TO_RES_%": st.column_config.NumberColumn("Dist to Res", format="%.1f%%"),
         },
         use_container_width=True, hide_index=True
     )
@@ -326,7 +327,7 @@ with tabs[0]:
                 c1, c2, c3 = st.columns(3)
                 c1.metric("💰 Total Invested", f"₹{t_inv:,.0f}")
                 c2.metric("📈 Current Value", f"₹{t_cur:,.0f}", f"₹{t_cur - t_inv:,.0f}")
-                c3.metric("🎯 Net P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
+                c3.metric("🎯 Net P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.1f}%")
                 
                 st.markdown("##### 🍩 Portfolio Exposure & Risk")
                 col_pie1, col_pie2 = st.columns(2)
@@ -340,7 +341,7 @@ with tabs[0]:
                     
                 st.markdown("##### 📊 Active Holdings")
                 st.dataframe(pdf.drop(columns=['Invested (₹)', 'Current (₹)', 'Sector']).style.format({
-                    "Avg Price": "{:.2f}", "CMP": "{:.2f}", "P&L (%)": "{:.1f}%", "Locked Target": "{:.2f}", "Trailing SL": "{:.2f}", "Profit/ Loss": "{:.0f}"
+                    "Avg Price": "{:.1f}", "CMP": "{:.1f}", "P&L (%)": "{:.1f}%", "Locked Target": "{:.1f}", "Trailing SL": "{:.1f}", "Profit/ Loss": "{:.0f}"
                 }).map(style_pnl, subset=['P&L (%)']).map(style_actions, subset=['🚨 ACTION']), 
                 column_config={
                     "Target Progress": st.column_config.ProgressColumn("Journey to Target", format="%.0f%%", min_value=0, max_value=100)
@@ -364,17 +365,16 @@ with tabs[0]:
             if not live_data.empty:
                 g = live_data.iloc[0]
                 
-                # --- RESPONSIVE GRID PATCH (minmax 120px) ---
                 st.markdown(f"""
                 <div class="gem-card">
-                    <h3 style="margin-top:0px; margin-bottom:15px;">{g['SYMBOL']} <span style="font-size:16px; margin-left:10px;">{g['VERDICT']}</span><span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span></h3>
+                    <h3 style="margin-top:0px; margin-bottom:15px;">{g['SYMBOL']} <span style="font-size:16px; margin-left:10px;">{g['VERDICT']}</span><span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']:.1f}/100</span></h3>
                     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 15px;">
                         <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Sector</p><p style="margin:0; font-weight:600;">{g['SECTOR']}</p></div>
                         <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Expected Hold</p><p style="margin:0; font-weight:600;">{g['EST_PERIOD']}</p></div>
-                        <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Volume Spike</p><p style="margin:0; font-weight:600;">{g['RVOL']}x Avg</p></div>
+                        <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Volume Spike</p><p style="margin:0; font-weight:600;">{g['RVOL']:.1f}x Avg</p></div>
                         <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Chart Pattern</p><p style="margin:0; font-weight:600;">{g['PATTERN']}</p></div>
-                        <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Algo Target</p><p style="margin:0; font-weight:600; color:#00FF88;">₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p></div>
-                        <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Hard Stop Loss</p><p style="margin:0; font-weight:600; color:#FF4B4B;">₹{g['STOP_LOSS']:.2f}</p></div>
+                        <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Algo Target</p><p style="margin:0; font-weight:600; color:#00FF88;">₹{g['TARGET']:.1f} (+{g['UPSIDE_%']:.1f}%)</p></div>
+                        <div><p style="margin:0; color:#A0AEC0; font-size:12px; text-transform:uppercase;">Hard Stop Loss</p><p style="margin:0; font-weight:600; color:#FF4B4B;">₹{g['STOP_LOSS']:.1f}</p></div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -410,7 +410,7 @@ with tabs[0]:
         st.markdown("### ➕ Add Trade")
         with st.form("add_trade"):
             a_sym = st.selectbox("Stock Symbol", sorted(df['SYMBOL'].unique().tolist()) if not df.empty else [])
-            a_price, a_qty = st.number_input("Buy Price", min_value=0.0, format="%.2f"), st.number_input("Quantity", min_value=1, step=1)
+            a_price, a_qty = st.number_input("Buy Price", min_value=0.0, format="%.1f"), st.number_input("Quantity", min_value=1, step=1)
             
             st.markdown("**Assign to Portfolio:**")
             combo_col1, combo_col2 = st.columns(2)
@@ -437,7 +437,7 @@ with tabs[0]:
         
         with st.form("sell_trade"):
             s_sym = st.selectbox("Stock to Sell", sell_holdings if sell_holdings else ["No Holdings"])
-            s_price, s_qty = st.number_input("Sell Price", min_value=0.0, format="%.2f"), st.number_input("Qty to Sell", min_value=1, step=1)
+            s_price, s_qty = st.number_input("Sell Price", min_value=0.0, format="%.1f"), st.number_input("Qty to Sell", min_value=1, step=1)
             s_reason = st.selectbox("Reason for Exit", ["Target Hit (Partial/Runner) 🎯", "Trailing SL Hit 🛡️", "Momentum Exhaustion ⚠️", "Time Expiration (Dead Money) ⏳", "Cut Losses Early ✂️", "Manual Exit"])
             
             if st.form_submit_button("Execute Sale") and not port_df.empty and s_sym != "No Holdings":
@@ -477,7 +477,6 @@ with tabs[1]:
                 
                 rr_ratio = reward_rs / risk_rs if risk_rs > 0 else 0
                 
-                # --- RESPONSIVE GRID PATCH (minmax 120px) & TIGHT HTML ---
                 st.markdown(f"""
                 <div class="gem-card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -485,16 +484,16 @@ with tabs[1]:
                         <div style="text-align:right;"><h2 style="margin:0px; color:#00B8FF;">{g['SCORE']:.1f}<span style="font-size:16px; color:#A0AEC0;">/100</span></h2></div>
                     </div>
                     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 15px; margin-bottom: 15px; background: #12141A; padding: 15px; border-radius: 8px;">
-                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">ENTRY</p><p style="margin:0; font-weight:bold; font-size:16px;">₹{g['PRICE']:.2f}</p></div>
-                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">TARGET</p><p style="margin:0; font-weight:bold; font-size:16px; color:#00FF88;">₹{g['TARGET']:.2f} <span style="font-size:12px;">(+{g['UPSIDE_%']:.1f}%)</span></p></div>
-                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">STOP LOSS</p><p style="margin:0; font-weight:bold; font-size:16px; color:#FF4B4B;">₹{g['STOP_LOSS']:.2f}</p></div>
+                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">ENTRY</p><p style="margin:0; font-weight:bold; font-size:16px;">₹{g['PRICE']:.1f}</p></div>
+                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">TARGET</p><p style="margin:0; font-weight:bold; font-size:16px; color:#00FF88;">₹{g['TARGET']:.1f} <span style="font-size:12px;">(+{g['UPSIDE_%']:.1f}%)</span></p></div>
+                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">STOP LOSS</p><p style="margin:0; font-weight:bold; font-size:16px; color:#FF4B4B;">₹{g['STOP_LOSS']:.1f}</p></div>
                         <div><p style="margin:0; font-size:12px; color:#A0AEC0;">PATTERN</p><p style="margin:0; font-weight:bold; font-size:14px;">{g['PATTERN']}</p></div>
                     </div>
                     <p style="margin:0px 0px 5px 0px; font-size:12px; color:#FAFAFA;"><b>Risk/Reward Ratio: 1 : {rr_ratio:.1f}</b></p>
                     <div style="width: 100%; height: 12px; background: #2D313A; border-radius: 6px; display: flex; overflow: hidden;">
-                        <div style="width: {risk_pct_width}%; background: #FF4B4B;" title="Risk: ₹{risk_rs:.2f}"></div>
+                        <div style="width: {risk_pct_width}%; background: #FF4B4B;" title="Risk: ₹{risk_rs:.1f}"></div>
                         <div style="width: 4px; background: #FAFAFA;"></div>
-                        <div style="width: {reward_pct_width}%; background: #00FF88;" title="Reward: ₹{reward_rs:.2f}"></div>
+                        <div style="width: {reward_pct_width}%; background: #00FF88;" title="Reward: ₹{reward_rs:.1f}"></div>
                     </div>
                     <div style="display:flex; justify-content:space-between; font-size:11px; color:#A0AEC0; margin-top:4px;">
                         <span>Stop Loss</span><span>Current Price</span><span>Target</span>
@@ -608,7 +607,7 @@ with tabs[3]:
             top_breakouts = breakouts.head(3)
             
             for _, b in top_breakouts.iterrows():
-                vol_text = f"<span style='color:#00FF88; font-weight:bold;'>Massive {b['RVOL']}x Volume!</span>" if b['RVOL'] > 1.5 else "<span style='color:#FFC107;'>Waiting for Volume Spike</span>"
+                vol_text = f"<span style='color:#00FF88; font-weight:bold;'>Massive {b['RVOL']:.1f}x Volume!</span>" if b['RVOL'] > 1.5 else "<span style='color:#FFC107;'>Waiting for Volume Spike</span>"
                 status_color = "#FF4B4B" if "HOT" in b['RADAR_STATUS'] else "#FFC107" if "WARM" in b['RADAR_STATUS'] else "#00B8FF"
                 
                 col_info, col_chart = st.columns([1, 1.5])
@@ -619,10 +618,10 @@ with tabs[3]:
                             <h3 style="margin:0;">{b['SYMBOL']}</h3>
                             <span style="background:{status_color}20; color:{status_color}; padding:4px 8px; border-radius:4px; font-size:12px; font-weight:bold;">{b['RADAR_STATUS']}</span>
                         </div>
-                        <p style="margin-top:10px; margin-bottom:5px;">Currently at <b>₹{b['PRICE']:.2f}</b>. Resistance is <b>₹{b['RESISTANCE']:.2f}</b>.</p>
+                        <p style="margin-top:10px; margin-bottom:5px;">Currently at <b>₹{b['PRICE']:.1f}</b>. Resistance is <b>₹{b['RESISTANCE']:.1f}</b>.</p>
                         <p style="margin-top:0px; font-size:14px; color:#A0AEC0;">Volume Check: {vol_text}</p>
                         <div style="background:#12141A; padding:10px; border-radius:6px; margin-top:15px;">
-                            <b>🚨 ACTION PLAN:</b> If price crosses ₹{b['RESISTANCE']:.2f} strictly after 1:30 PM with volume, BUY. Target: ₹{b['TARGET']:.2f}.
+                            <b>🚨 ACTION PLAN:</b> If price crosses ₹{b['RESISTANCE']:.1f} strictly after 1:30 PM with volume, BUY. Target: ₹{b['TARGET']:.1f}.
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -660,7 +659,7 @@ with tabs[4]:
                     <div class="action-card">
                         <b>{p['SYMBOL']}</b> is experiencing massive unnatural volume (<b>{p['RVOL']:.1f}x</b> normal activity).<br>
                         <i>Why it matters:</i> Penny stocks only move when operators step in. The algorithm detected heavy accumulation.<br>
-                        <b>Action:</b> High risk. If you enter, use strict capital sizing and place a hard Stop Loss at ₹{p['SUPPORT']:.2f}.
+                        <b>Action:</b> High risk. If you enter, use strict capital sizing and place a hard Stop Loss at ₹{p['SUPPORT']:.1f}.
                     </div>
                     """, unsafe_allow_html=True)
             else:
@@ -734,17 +733,17 @@ with tabs[5]:
             profit_factor = (gross_wins / gross_losses) if gross_losses > 0 else (10.0 if gross_wins > 0 else 0)
 
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("💰 Net Profit", f"₹{net_profit:,.2f}")
+            c1.metric("💰 Net Profit", f"₹{net_profit:,.0f}")
             c2.metric("🎯 Win Rate", f"{win_rate:.1f}%", f"{total_trades} Trades")
-            c3.metric("📈 Avg Win", f"{avg_win:+.2f}%")
-            c4.metric("📉 Avg Loss", f"{avg_loss:.2f}%")
-            c5.metric("⚖️ Profit Factor", f"{profit_factor:.2f}")
+            c3.metric("📈 Avg Win", f"{avg_win:+.1f}%")
+            c4.metric("📉 Avg Loss", f"{avg_loss:.1f}%")
+            c5.metric("⚖️ Profit Factor", f"{profit_factor:.1f}")
 
             st.markdown("---")
             if 'exit_reason' not in filtered_hist.columns: filtered_hist['exit_reason'] = "N/A"
 
             st.dataframe(filtered_hist[['symbol', 'buy_price', 'sell_price', 'pl_percentage', 'realized_pl', 'exit_reason', 'sell_date']].sort_values(by='sell_date', ascending=False).style.format({
-                "sell_price": "{:.2f}", "buy_price": "{:.2f}", "realized_pl": "{:.2f}", "pl_percentage": "{:.2f}%"
+                "sell_price": "{:.1f}", "buy_price": "{:.1f}", "realized_pl": "{:.0f}", "pl_percentage": "{:.1f}%"
             }).map(style_pnl, subset=['realized_pl']), use_container_width=True, hide_index=True)
             
         else:
