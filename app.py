@@ -6,6 +6,7 @@ import numpy as np
 import yfinance as yf
 import pytz
 import plotly.graph_objects as go
+import plotly.express as px
 
 st.set_page_config(page_title="Titan Quantum Pro", layout="wide", page_icon="💎")
 
@@ -230,12 +231,49 @@ def render_df_with_progress(data, cols_to_show):
     )
 
 # ==========================================
-# TAB 1: MARKET SCREENER 
+# TAB 1: MARKET SCREENER & SECTOR BREADTH
 # ==========================================
 with tabs[0]:
     if not df.empty:
         inst_df = df[df['CAP_CATEGORY'] != "Small/Penny Cap"]
         
+        # --- NEW: TOP-DOWN SECTOR BREADTH HEATMAP ---
+        st.subheader("🌍 Sector Breadth Heatmap (Institutional Money Flow)")
+        
+        # Calculate Breadth: % of stocks in each sector in an Institutional Weekly Uptrend
+        breadth_df = inst_df[inst_df['SECTOR'] != 'Unknown'].groupby('SECTOR').agg(
+            Total_Stocks=('SYMBOL', 'count'),
+            Bullish_Stocks=('INSTITUTIONAL_TREND', lambda x: (x == 'Bullish').sum()),
+            Avg_Score=('SCORE', 'mean')
+        ).reset_index()
+        
+        # Calculate the health percentage
+        breadth_df['Breadth_%'] = (breadth_df['Bullish_Stocks'] / breadth_df['Total_Stocks']) * 100
+        breadth_df = breadth_df[breadth_df['Total_Stocks'] >= 3] # Filter out tiny sectors with < 3 stocks
+        breadth_df = breadth_df.sort_values('Breadth_%', ascending=False)
+        
+        if not breadth_df.empty:
+            # Draw the Interactive Treemap
+            fig_treemap = px.treemap(
+                breadth_df, 
+                path=[px.Constant("Indian Market"), 'SECTOR'], 
+                values='Total_Stocks',
+                color='Breadth_%',
+                color_continuous_scale=['#FF4B4B', '#1A1C24', '#00FF88'], # Red -> Black -> Green
+                color_continuous_midpoint=50,
+                custom_data=['Breadth_%', 'Avg_Score', 'Bullish_Stocks', 'Total_Stocks']
+            )
+            
+            fig_treemap.update_traces(
+                hovertemplate="<b>%{label}</b><br>Sector Breadth: %{customdata[0]:.1f}% Bullish<br>Bullish Stocks: %{customdata[2]} / %{customdata[3]}<br>Avg Algo Score: %{customdata[1]:.1f}/100",
+                texttemplate="<b>%{label}</b>"
+            )
+            fig_treemap.update_layout(margin=dict(t=10, l=0, r=0, b=0), height=400, template='plotly_dark')
+            st.plotly_chart(fig_treemap, use_container_width=True)
+            
+        st.markdown("---")
+        
+        # --- EXISTING SCREENER CONTROLS ---
         c1, c2, c3, c4 = st.columns([1.5, 1, 1, 1])
         search_q = c1.selectbox("🔍 Search Symbol", ["ALL"] + sorted(inst_df['SYMBOL'].dropna().unique().tolist()))
         min_score = c2.slider("Min Score", 0, 100, 0)
@@ -276,7 +314,7 @@ with tabs[0]:
             **2. 🟢 Bullish Engulfing:** Strong reversal signal. Buy if score is high. Place Stop Loss below yesterday's low.
             **3. Uptrending / Consolidating:** Behaving normally. Buy near `Support`, Sell near `Target`. 
             """)
-
+            
 # ==========================================
 # TAB 2: BREAKOUT WATCHLIST 
 # ==========================================
