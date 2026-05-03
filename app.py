@@ -373,9 +373,17 @@ with tabs[2]:
                     live_target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
                     entry = float(row['entry_price'])
                     
-                    # FETCH LOCKED TARGET (Or fallback to live target if it's an old trade without the new DB column)
-                    locked_target = float(row.get('entry_target', live_target)) 
-                    if pd.isna(locked_target) or locked_target == 0: locked_target = live_target
+                    # FETCH LOCKED TARGET SAFELY (Handles old trades where Supabase returns null/None)
+                    raw_target = row.get('entry_target')
+                    if pd.isna(raw_target) or raw_target is None or str(raw_target).strip() == "":
+                        locked_target = live_target
+                    else:
+                        try:
+                            locked_target = float(raw_target)
+                        except (ValueError, TypeError):
+                            locked_target = live_target
+                            
+                    if locked_target == 0: locked_target = live_target
                     
                     curr_score = float(live_data.iloc[0]['SCORE']) if not live_data.empty else 0
                     
