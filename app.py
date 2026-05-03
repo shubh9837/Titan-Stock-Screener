@@ -312,38 +312,61 @@ with tabs[0]:
             """)
             
 # ==========================================
-# TAB 2: BREAKOUT WATCHLIST 
+# TAB 2: BREAKOUT WATCHLIST (Ignition Radar)
 # ==========================================
 with tabs[1]:
-    st.subheader("⚡ Imminent Pre-Breakouts (> 50 Score)")
+    st.subheader("⚡ Imminent Breakout Radar")
     if not df.empty:
-        breakouts = df[(df['PATTERN'].str.contains('Squeeze', na=False)) & (df['SCORE'] > 50)]
+        # Filter for Squeeze/Consolidation patterns and decent scores
+        breakouts = df[(df['PATTERN'].str.contains('Squeeze|Consolidating', na=False)) & (df['SCORE'] > 50)].copy()
+        
         if not breakouts.empty:
-            render_df_with_progress(breakouts, ['VERDICT', 'SCORE', 'SYMBOL', 'EST_PERIOD', 'PRICE', 'RESISTANCE', 'TARGET', 'UPSIDE_%', 'RVOL'])
+            # --- UPGRADE: IGNITION PROXIMITY ENGINE ---
+            # Calculate exactly how far the stock is from breaking resistance
+            breakouts['DIST_TO_RES_%'] = ((breakouts['RESISTANCE'] - breakouts['PRICE']) / breakouts['PRICE']) * 100
+            # Filter out stocks that have already broken way past resistance or are too far away
+            breakouts = breakouts[(breakouts['DIST_TO_RES_%'] >= -1.0) & (breakouts['DIST_TO_RES_%'] <= 5.0)]
             
-            st.markdown("---")
-            st.markdown("### 🎯 Top Actionable Setups")
-            top_breakouts = breakouts.sort_values("SCORE", ascending=False).head(2)
+            # Create a visual status column
+            breakouts['RADAR_STATUS'] = breakouts['DIST_TO_RES_%'].apply(
+                lambda x: "🔥 HOT (< 1% Away)" if x <= 1.0 else "⚠️ WARMING (1-3% Away)" if x <= 3.0 else "🧊 COOL (> 3% Away)"
+            )
+            
+            # Sort so the hottest breakouts are at the top
+            breakouts = breakouts.sort_values("DIST_TO_RES_%", ascending=True)
+            
+            st.markdown("### 🎯 Top Actionable Setups (Ranked by Proximity)")
+            top_breakouts = breakouts.head(3)
             
             for _, b in top_breakouts.iterrows():
-                vol_text = f"Massive volume spike ({b['RVOL']}x average)" if b['RVOL'] > 1.5 else "Waiting for volume confirmation"
-                col_info, col_chart = st.columns([1, 1.5])
+                vol_text = f"<span style='color:#00FF88; font-weight:bold;'>Massive {b['RVOL']}x Volume!</span>" if b['RVOL'] > 1.5 else "<span style='color:#FFC107;'>Waiting for Volume Spike</span>"
+                status_color = "#FF4B4B" if "HOT" in b['RADAR_STATUS'] else "#FFC107" if "WARM" in b['RADAR_STATUS'] else "#00B8FF"
                 
+                col_info, col_chart = st.columns([1, 1.5])
                 with col_info:
                     st.markdown(f"""
-                    <div class="action-card">
-                        <b>{b['SYMBOL']}</b> | Crosses Resistance at <b>₹{b['RESISTANCE']:.2f}</b><br>
-                        <i>Why:</i> Score is {b['SCORE']}/100. Upside is {b['UPSIDE_%']:.1f}%.<br>
-                        <i>Status:</i> {vol_text}.<br>
-                        <b>ACTION PLAN:</b> If CMP > ₹{b['RESISTANCE']:.2f} at 2:00 PM, Buy. Hold for {b['EST_PERIOD']}.
+                    <div class="action-card" style="border-left-color: {status_color};">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <h3 style="margin:0;">{b['SYMBOL']}</h3>
+                            <span style="background:{status_color}20; color:{status_color}; padding:4px 8px; border-radius:4px; font-size:12px; font-weight:bold;">{b['RADAR_STATUS']}</span>
+                        </div>
+                        <p style="margin-top:10px; margin-bottom:5px;">Currently at <b>₹{b['PRICE']:.2f}</b>. Resistance is <b>₹{b['RESISTANCE']:.2f}</b>.</p>
+                        <p style="margin-top:0px; font-size:14px; color:#A0AEC0;">Volume Check: {vol_text}</p>
+                        <div style="background:#12141A; padding:10px; border-radius:6px; margin-top:15px;">
+                            <b>🚨 ACTION PLAN:</b> If price crosses ₹{b['RESISTANCE']:.2f} strictly after 1:30 PM with volume, BUY. Target: ₹{b['TARGET']:.2f}.
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
                 with col_chart:
                     with st.expander(f"📊 View {b['SYMBOL']} Chart"):
                         render_interactive_chart(b['SYMBOL'], "breakout")
+                        
+            st.markdown("---")
+            st.subheader("📡 Full Radar Tracking")
+            render_df_with_progress(breakouts, ['RADAR_STATUS', 'DIST_TO_RES_%', 'SYMBOL', 'SCORE', 'PRICE', 'RESISTANCE', 'TARGET', 'RVOL'])
         else:
-            st.info("No imminent high-quality breakouts detected today.")
-
+            st.info("No imminent high-quality breakouts detected today. Cash is a position.")
+            
 # ==========================================
 # TAB 3: PORTFOLIO MANAGER & ACTION ENGINE
 # ==========================================
@@ -590,7 +613,7 @@ with tabs[2]:
                     st.rerun()
 
 # ==========================================
-# TAB 4: SWING GEMS
+# TAB 4: SWING GEMS (High Conviction Alpha)
 # ==========================================
 with tabs[3]:
     st.subheader("💎 Institutional Swing Gems")
@@ -600,14 +623,47 @@ with tabs[3]:
         
         if not alpha_gems.empty:
             for _, g in alpha_gems.iterrows():
+                
+                # --- UPGRADE: VISUAL RISK/REWARD CALCULATOR ---
+                risk_rs = g['PRICE'] - g['STOP_LOSS']
+                reward_rs = g['TARGET'] - g['PRICE']
+                total_range = g['TARGET'] - g['STOP_LOSS']
+                
+                if total_range > 0 and risk_rs > 0:
+                    risk_pct_width = (risk_rs / total_range) * 100
+                    reward_pct_width = (reward_rs / total_range) * 100
+                else:
+                    risk_pct_width, reward_pct_width = 50, 50 # Fallback
+                
+                rr_ratio = reward_rs / risk_rs if risk_rs > 0 else 0
+                
                 st.markdown(f"""
                 <div class="gem-card">
-                    <h3 style="margin-top:0px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100 | Hold: {g['EST_PERIOD']}</span></h3>
-                    <div style="display:flex; justify-content:space-between;">
-                        <p><b>CMP:</b> ₹{g['PRICE']:.2f}</p>
-                        <p style="color:#00FF88;"><b>Target:</b> ₹{g['TARGET']:.2f} (+{g['UPSIDE_%']:.2f}%)</p>
-                        <p style="color:#FF4B4B;"><b>Stop Loss:</b> ₹{g['STOP_LOSS']:.2f}</p>
-                        <p><b>Pattern:</b> {g['PATTERN']}</p>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h3 style="margin-top:0px; margin-bottom:5px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0; font-weight:normal;"> | {g['SECTOR']} | Hold: {g['EST_PERIOD']}</span></h3>
+                        <div style="text-align:right;">
+                            <h2 style="margin:0px; color:#00B8FF;">{g['SCORE']:.1f}<span style="font-size:16px; color:#A0AEC0;">/100</span></h2>
+                        </div>
+                    </div>
+                    
+                    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 15px; margin-bottom: 15px; background: #12141A; padding: 15px; border-radius: 8px;">
+                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">ENTRY</p><p style="margin:0; font-weight:bold; font-size:16px;">₹{g['PRICE']:.2f}</p></div>
+                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">TARGET</p><p style="margin:0; font-weight:bold; font-size:16px; color:#00FF88;">₹{g['TARGET']:.2f} <span style="font-size:12px;">(+{g['UPSIDE_%']:.1f}%)</span></p></div>
+                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">STOP LOSS</p><p style="margin:0; font-weight:bold; font-size:16px; color:#FF4B4B;">₹{g['STOP_LOSS']:.2f}</p></div>
+                        <div><p style="margin:0; font-size:12px; color:#A0AEC0;">PATTERN</p><p style="margin:0; font-weight:bold; font-size:14px;">{g['PATTERN']}</p></div>
+                    </div>
+                    
+                    <!-- THE VISUAL RISK/REWARD BAR -->
+                    <p style="margin:0px 0px 5px 0px; font-size:12px; color:#FAFAFA;"><b>Risk/Reward Ratio: 1 : {rr_ratio:.1f}</b></p>
+                    <div style="width: 100%; height: 12px; background: #2D313A; border-radius: 6px; display: flex; overflow: hidden;">
+                        <div style="width: {risk_pct_width}%; background: #FF4B4B;" title="Risk: ₹{risk_rs:.2f}"></div>
+                        <div style="width: 4px; background: #FAFAFA;"></div> <!-- The Entry Point -->
+                        <div style="width: {reward_pct_width}%; background: #00FF88;" title="Reward: ₹{reward_rs:.2f}"></div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-size:11px; color:#A0AEC0; margin-top:4px;">
+                        <span>Stop Loss</span>
+                        <span>Current Price</span>
+                        <span>Target</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -615,7 +671,7 @@ with tabs[3]:
                     render_interactive_chart(g['SYMBOL'], "gem")
         else:
             st.info("⚠️ No Alpha Gems found right now. The market is currently lacking safe, high-conviction momentum setups.")
-
+            
 # ==========================================
 # TAB 5: PENNY / MICRO SANDBOX
 # ==========================================
