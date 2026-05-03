@@ -636,34 +636,27 @@ with tabs[3]:
                     risk_pct_width, reward_pct_width = 50, 50 # Fallback
                 
                 rr_ratio = reward_rs / risk_rs if risk_rs > 0 else 0
-                
+                # --- UPGRADED VISUAL CARD (FIXED RENDERING) ---
                 st.markdown(f"""
                 <div class="gem-card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <h3 style="margin-top:0px; margin-bottom:5px;">{g['SYMBOL']} <span style="font-size:14px; color:#A0AEC0; font-weight:normal;"> | {g['SECTOR']} | Hold: {g['EST_PERIOD']}</span></h3>
-                        <div style="text-align:right;">
-                            <h2 style="margin:0px; color:#00B8FF;">{g['SCORE']:.1f}<span style="font-size:16px; color:#A0AEC0;">/100</span></h2>
-                        </div>
+                        <div style="text-align:right;"><h2 style="margin:0px; color:#00B8FF;">{g['SCORE']:.1f}<span style="font-size:16px; color:#A0AEC0;">/100</span></h2></div>
                     </div>
-                    
                     <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 15px; margin-bottom: 15px; background: #12141A; padding: 15px; border-radius: 8px;">
                         <div><p style="margin:0; font-size:12px; color:#A0AEC0;">ENTRY</p><p style="margin:0; font-weight:bold; font-size:16px;">₹{g['PRICE']:.2f}</p></div>
                         <div><p style="margin:0; font-size:12px; color:#A0AEC0;">TARGET</p><p style="margin:0; font-weight:bold; font-size:16px; color:#00FF88;">₹{g['TARGET']:.2f} <span style="font-size:12px;">(+{g['UPSIDE_%']:.1f}%)</span></p></div>
                         <div><p style="margin:0; font-size:12px; color:#A0AEC0;">STOP LOSS</p><p style="margin:0; font-weight:bold; font-size:16px; color:#FF4B4B;">₹{g['STOP_LOSS']:.2f}</p></div>
                         <div><p style="margin:0; font-size:12px; color:#A0AEC0;">PATTERN</p><p style="margin:0; font-weight:bold; font-size:14px;">{g['PATTERN']}</p></div>
                     </div>
-                    
-                    <!-- THE VISUAL RISK/REWARD BAR -->
                     <p style="margin:0px 0px 5px 0px; font-size:12px; color:#FAFAFA;"><b>Risk/Reward Ratio: 1 : {rr_ratio:.1f}</b></p>
                     <div style="width: 100%; height: 12px; background: #2D313A; border-radius: 6px; display: flex; overflow: hidden;">
                         <div style="width: {risk_pct_width}%; background: #FF4B4B;" title="Risk: ₹{risk_rs:.2f}"></div>
-                        <div style="width: 4px; background: #FAFAFA;"></div> <!-- The Entry Point -->
+                        <div style="width: 4px; background: #FAFAFA;"></div>
                         <div style="width: {reward_pct_width}%; background: #00FF88;" title="Reward: ₹{reward_rs:.2f}"></div>
                     </div>
                     <div style="display:flex; justify-content:space-between; font-size:11px; color:#A0AEC0; margin-top:4px;">
-                        <span>Stop Loss</span>
-                        <span>Current Price</span>
-                        <span>Target</span>
+                        <span>Stop Loss</span><span>Current Price</span><span>Target</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
