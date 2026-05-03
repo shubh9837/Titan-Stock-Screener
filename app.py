@@ -238,29 +238,25 @@ with tabs[0]:
     if not df.empty:
         inst_df = df[df['CAP_CATEGORY'] != "Small/Penny Cap"]
         
-        # --- NEW: TOP-DOWN SECTOR BREADTH HEATMAP ---
         st.subheader("🌍 Sector Breadth Heatmap (Institutional Money Flow)")
         
-        # Calculate Breadth: % of stocks in each sector in an Institutional Weekly Uptrend
         breadth_df = inst_df[inst_df['SECTOR'] != 'Unknown'].groupby('SECTOR').agg(
             Total_Stocks=('SYMBOL', 'count'),
             Bullish_Stocks=('INSTITUTIONAL_TREND', lambda x: (x == 'Bullish').sum()),
             Avg_Score=('SCORE', 'mean')
         ).reset_index()
         
-        # Calculate the health percentage
         breadth_df['Breadth_%'] = (breadth_df['Bullish_Stocks'] / breadth_df['Total_Stocks']) * 100
-        breadth_df = breadth_df[breadth_df['Total_Stocks'] >= 3] # Filter out tiny sectors with < 3 stocks
+        breadth_df = breadth_df[breadth_df['Total_Stocks'] >= 3] 
         breadth_df = breadth_df.sort_values('Breadth_%', ascending=False)
         
         if not breadth_df.empty:
-            # Draw the Interactive Treemap
             fig_treemap = px.treemap(
                 breadth_df, 
                 path=[px.Constant("Indian Market"), 'SECTOR'], 
                 values='Total_Stocks',
                 color='Breadth_%',
-                color_continuous_scale=['#FF4B4B', '#1A1C24', '#00FF88'], # Red -> Black -> Green
+                color_continuous_scale=['#FF4B4B', '#1A1C24', '#00FF88'],
                 color_continuous_midpoint=50,
                 custom_data=['Breadth_%', 'Avg_Score', 'Bullish_Stocks', 'Total_Stocks']
             )
@@ -274,7 +270,6 @@ with tabs[0]:
             
         st.markdown("---")
         
-        # --- EXISTING SCREENER CONTROLS ---
         c1, c2, c3, c4 = st.columns([1.5, 1, 1, 1])
         search_q = c1.selectbox("🔍 Search Symbol", ["ALL"] + sorted(inst_df['SYMBOL'].dropna().unique().tolist()))
         min_score = c2.slider("Min Score", 0, 100, 0)
@@ -373,7 +368,7 @@ with tabs[2]:
                     live_target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
                     entry = float(row['entry_price'])
                     
-                    # FETCH LOCKED TARGET SAFELY (Handles old trades where Supabase returns null/None)
+                    # --- BUG FIX: FETCH LOCKED TARGET SAFELY (Handles old NoneType trades) ---
                     raw_target = row.get('entry_target')
                     if pd.isna(raw_target) or raw_target is None or str(raw_target).strip() == "":
                         locked_target = live_target
@@ -382,9 +377,10 @@ with tabs[2]:
                             locked_target = float(raw_target)
                         except (ValueError, TypeError):
                             locked_target = live_target
-                            
                     if locked_target == 0: locked_target = live_target
                     
+                    # Sector retrieval for pie charts
+                    sector = live_data.iloc[0]['SECTOR'] if not live_data.empty else "Unknown"
                     curr_score = float(live_data.iloc[0]['SCORE']) if not live_data.empty else 0
                     
                     try:
@@ -428,21 +424,42 @@ with tabs[2]:
                         action = "🕰️ TIME CAPITULATION (DEAD MONEY)"
                     else:
                         action = "⏳ HOLD"
+                        
+                    # Calculate Progress to Target metric
+                    if locked_target > entry:
+                        t_prog = ((cmp - entry) / (locked_target - entry)) * 100
+                    else:
+                        t_prog = 0
+                    t_prog = max(0, min(100, t_prog)) # Lock between 0 and 100
                     
                     port_calc.append({
-                        "🚨 ACTION": action, "Symbol": sym, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
-                        "P&L (%)": pnl_perc, "Profit/ Loss": cur_profit, "Locked Target": locked_target, "Trailing SL": trailing_sl,
+                        "🚨 ACTION": action, "Symbol": sym, "Sector": sector, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
+                        "P&L (%)": pnl_perc, "Target Progress": t_prog, "Profit/ Loss": cur_profit, 
+                        "Locked Target": locked_target, "Trailing SL": trailing_sl,
                         "Days Held": days_held, "Invested (₹)": invested, "Current (₹)": cur_val
                     })
                     
                 pdf = pd.DataFrame(port_calc)
                 t_inv, t_cur = pdf['Invested (₹)'].sum(), pdf['Current (₹)'].sum()
                 
+                # Top Metrics
                 c1, c2, c3 = st.columns(3)
                 c1.metric("💰 Total Invested", f"₹{t_inv:,.0f}")
                 c2.metric("📈 Current Value", f"₹{t_cur:,.0f}", f"₹{t_cur - t_inv:,.0f}")
                 c3.metric("🎯 Net P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
                 
+                # --- UPGRADE: VISUAL EXPOSURE DONUT CHARTS ---
+                st.markdown("##### 🍩 Portfolio Exposure & Risk")
+                col_pie1, col_pie2 = st.columns(2)
+                fig_stock = px.pie(pdf, values='Current (₹)', names='Symbol', hole=0.4, title="Allocation by Stock", template="plotly_dark", color_discrete_sequence=px.colors.sequential.Teal)
+                fig_stock.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=280)
+                col_pie1.plotly_chart(fig_stock, use_container_width=True)
+
+                fig_sec = px.pie(pdf, values='Current (₹)', names='Sector', hole=0.4, title="Exposure by Sector", template="plotly_dark", color_discrete_sequence=px.colors.sequential.Sunset)
+                fig_sec.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=280)
+                col_pie2.plotly_chart(fig_sec, use_container_width=True)
+                
+                # Table Formatting Functions
                 def style_actions(val):
                     v = str(val).upper()
                     if 'SCALE OUT' in v: return 'color: #00FF88; font-weight: bold;'
@@ -455,13 +472,19 @@ with tabs[2]:
                     if pd.isna(val) or isinstance(val, str): return ''
                     return f"color: {'#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'}"
                     
-                st.dataframe(pdf.drop(columns=['Invested (₹)', 'Current (₹)']).style.format({
+                st.markdown("##### 📊 Active Holdings")
+                # --- UPGRADE: PROGRESS TO TARGET BARS IN TABLE ---
+                st.dataframe(pdf.drop(columns=['Invested (₹)', 'Current (₹)', 'Sector']).style.format({
                     "Avg Price": "{:.2f}", "CMP": "{:.2f}", "P&L (%)": "{:.1f}%", "Locked Target": "{:.2f}", "Trailing SL": "{:.2f}", "Profit/ Loss": "{:.0f}"
-                }).map(style_pnl, subset=['P&L (%)']).map(style_actions, subset=['🚨 ACTION']), use_container_width=True, hide_index=True)
+                }).map(style_pnl, subset=['P&L (%)']).map(style_actions, subset=['🚨 ACTION']), 
+                column_config={
+                    "Target Progress": st.column_config.ProgressColumn("Journey to Target", format="%.0f%%", min_value=0, max_value=100)
+                },
+                use_container_width=True, hide_index=True)
             else:
                 st.info(f"No active holdings in {owner}.")
 
-# 2. DEEP DIVE ANALYSIS SECTION (FIXED DOM RENDERING)
+    # 2. DEEP DIVE ANALYSIS SECTION
     st.markdown("---")
     st.subheader("🔍 Deep Dive Analysis")
     
@@ -476,7 +499,6 @@ with tabs[2]:
             if not live_data.empty:
                 g = live_data.iloc[0]
                 
-                # --- UPGRADED DEEP DIVE UI CARD ---
                 st.markdown(f"""
                 <div class="gem-card">
                     <h3 style="margin-top:0px; margin-bottom:15px;">{g['SYMBOL']} <span style="font-size:16px; margin-left:10px;">{g['VERDICT']}</span><span style="font-size:14px; color:#A0AEC0;"> | Score: {g['SCORE']}/100</span></h3>
@@ -493,6 +515,25 @@ with tabs[2]:
                 
                 st.write("") # Invisible buffer to protect the canvas
                 render_interactive_chart(dd_sym, "deep_dive_fixed")
+                
+                # --- UPGRADE: LIVE CATALYST & NEWS FEED ---
+                st.markdown("---")
+                st.markdown(f"### 📰 {dd_sym} Live Catalyst & News Feed")
+                try:
+                    news = yf.Ticker(f"{dd_sym}.NS").news
+                    if news and len(news) > 0:
+                        for n in news[:3]:
+                            ts = datetime.datetime.fromtimestamp(n['providerPublishTime']).strftime('%Y-%m-%d %H:%M')
+                            st.markdown(f"""
+                            <div style="background: #1A1C24; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #00B8FF;">
+                                <h4 style="margin-top:0px; margin-bottom:5px;"><a href="{n['link']}" target="_blank" style="color: #FAFAFA; text-decoration: none;">{n['title']}</a></h4>
+                                <span style="color: #A0AEC0; font-size: 12px;">{n['publisher']} • {ts}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.info("No recent news found for this stock.")
+                except Exception as e:
+                    st.info("News feed currently unavailable.")
     else:
         col_dd2.info("Add stocks to this portfolio to unlock Deep Dive.")
         
@@ -514,14 +555,13 @@ with tabs[2]:
             if st.form_submit_button("Add to Portfolio"):
                 final_add_owner = new_owner.strip() if existing_owner == "➕ Create New Portfolio" else existing_owner
                 if final_add_owner and a_sym:
-                    # FETCH TARGET TO LOCK IT IN
                     live_stock_data = df[df['SYMBOL'] == a_sym]
                     locked_target = float(live_stock_data['TARGET'].iloc[0]) if not live_stock_data.empty else (a_price * 1.15)
                     
                     supabase.table('portfolio').insert({
                         "symbol": a_sym, "entry_price": a_price, "qty": int(a_qty), 
                         "date": str(datetime.date.today()), "owner": final_add_owner,
-                        "entry_target": locked_target  # <-- TARGET LOCKED
+                        "entry_target": locked_target
                     }).execute()
                     st.rerun()
                     
@@ -632,13 +672,10 @@ with tabs[5]:
     st.subheader(f"🏆 {owner_choice_hist} Performance & Graveyard")
     
     if not active_hist.empty:
-        # 1. Clean Dates for accurate filtering
         active_hist['sell_date'] = pd.to_datetime(active_hist['sell_date']).dt.date
         today = datetime.date.today()
         
-        # 2. Dynamic Time Filter UI
         time_filter = col_hist_2.selectbox("📅 Select Time Period", ["All Time", "Today", "This Week (WTD)", "This Month (MTD)", "Financial Year (FYTD)", "Custom Date Range"])
-        
         start_date, end_date = None, None
         
         if time_filter == "Today":
@@ -650,7 +687,6 @@ with tabs[5]:
             start_date = today.replace(day=1)
             end_date = today
         elif time_filter == "Financial Year (FYTD)":
-            # Indian FY starts April 1st
             fy_start_year = today.year if today.month >= 4 else today.year - 1
             start_date = datetime.date(fy_start_year, 4, 1)
             end_date = today
@@ -659,12 +695,10 @@ with tabs[5]:
             if len(dates) == 2:
                 start_date, end_date = dates
                 
-        # 3. Apply the Filter
         filtered_hist = active_hist.copy()
         if start_date and end_date:
             filtered_hist = filtered_hist[(filtered_hist['sell_date'] >= start_date) & (filtered_hist['sell_date'] <= end_date)]
             
-        # 4. Calculate Dynamic Metrics
         if not filtered_hist.empty:
             total_trades = len(filtered_hist)
             wins = filtered_hist[filtered_hist['realized_pl'] > 0]
@@ -679,7 +713,6 @@ with tabs[5]:
             gross_losses = abs(losses['realized_pl'].sum())
             profit_factor = (gross_wins / gross_losses) if gross_losses > 0 else (10.0 if gross_wins > 0 else 0)
 
-            # 5. Render Metric Cards
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("💰 Net Profit", f"₹{net_profit:,.2f}")
             c2.metric("🎯 Win Rate", f"{win_rate:.1f}%", f"{total_trades} Trades")
@@ -690,12 +723,10 @@ with tabs[5]:
             st.markdown("---")
             if 'exit_reason' not in filtered_hist.columns: filtered_hist['exit_reason'] = "N/A"
             
-            # Helper to color code the P&L column in the dataframe
             def style_realized_pl(val):
                 if pd.isna(val): return ''
                 return f"color: {'#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'}"
 
-            # 6. Render Dataframe
             st.dataframe(filtered_hist[['symbol', 'buy_price', 'sell_price', 'pl_percentage', 'realized_pl', 'exit_reason', 'sell_date']].sort_values(by='sell_date', ascending=False).style.format({
                 "sell_price": "{:.2f}", "buy_price": "{:.2f}", "realized_pl": "{:.2f}", "pl_percentage": "{:.2f}%"
             }).map(style_realized_pl, subset=['realized_pl']), use_container_width=True, hide_index=True)
