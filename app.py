@@ -122,6 +122,7 @@ def render_interactive_chart(symbol, unique_key_suffix=""):
         
     except Exception as e:
         st.error(f"Could not render chart. Engine Error: {str(e)}")
+
 @st.cache_data(ttl=60) 
 def get_macro_weather():
     try:
@@ -349,7 +350,7 @@ with tabs[1]:
             st.info("No imminent high-quality breakouts detected today.")
 
 # ==========================================
-# TAB 3: PORTFOLIO MANAGER (Infinite Dynamic Portfolios)
+# TAB 3: PORTFOLIO MANAGER & ACTION ENGINE
 # ==========================================
 with tabs[2]:
     all_owners = port_df['owner'].unique().tolist() if not port_df.empty else []
@@ -369,26 +370,31 @@ with tabs[2]:
                     live_data = df[df['SYMBOL'] == sym] if not df.empty and 'SYMBOL' in df.columns else pd.DataFrame()
                         
                     cmp = float(live_data.iloc[0]['PRICE']) if not live_data.empty else float(row['entry_price'])
-                    target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
+                    live_target = float(live_data.iloc[0]['TARGET']) if not live_data.empty else 0.0
                     entry = float(row['entry_price'])
                     
+                    # FETCH LOCKED TARGET (Or fallback to live target if it's an old trade without the new DB column)
+                    locked_target = float(row.get('entry_target', live_target)) 
+                    if pd.isna(locked_target) or locked_target == 0: locked_target = live_target
+                    
                     curr_score = float(live_data.iloc[0]['SCORE']) if not live_data.empty else 0
-                    curr_rvol = float(live_data.iloc[0]['RVOL']) if not live_data.empty else 0
                     
                     try:
                         entry_date = pd.to_datetime(row['date']).date()
                         days_held = (datetime.date.today() - entry_date).days
-                        est_period = live_data.iloc[0]['EST_PERIOD'] if not live_data.empty else "15-30 Days"
-                        max_days = int(est_period.split('-')[1].split(' ')[0])
                     except:
                         days_held = 0
-                        max_days = 30 
                     
-                    health_status = "🟢 Healthy Uptrend"
-                    if not live_data.empty:
-                        pattern = live_data.iloc[0]['PATTERN']
-                        if curr_score < 40: health_status = "🔴 Momentum Dead (Consider Exit)"
-                        elif "Consolidating" in pattern: health_status = "🟡 Choppy/Sideways"
+                    # 3-EMA vs 8-EMA Micro-Trend Logic for Momentum Exhaustion
+                    momentum_exhausted = False
+                    try:
+                        hist_1mo = yf.download(f"{sym}.NS", period="1mo", progress=False, ignore_tz=True)
+                        if not hist_1mo.empty:
+                            close_px = hist_1mo['Close'] if isinstance(hist_1mo.columns, pd.Index) else hist_1mo['Close'].iloc[:, 0]
+                            ema3 = close_px.ewm(span=3, adjust=False).mean().iloc[-1]
+                            ema8 = close_px.ewm(span=8, adjust=False).mean().iloc[-1]
+                            if ema3 < ema8: momentum_exhausted = True
+                    except: pass
 
                     algo_sl = float(live_data.iloc[0]['STOP_LOSS']) if not live_data.empty else (entry * 0.90)
                     if cmp >= (entry * 1.10): trailing_sl = entry * 1.05 
@@ -398,25 +404,26 @@ with tabs[2]:
                     qty = int(row['qty'])
                     invested = entry * qty
                     cur_val = cmp * qty
-                    target_val = target * qty 
                     pnl_perc = ((cmp - entry) / entry) * 100
                     cur_profit = qty * (cmp - entry)
                     
-                    if cmp <= trailing_sl or "Dead" in health_status:
-                        action = "🚨 EXIT FULL (SL/Trend Broken)"
-                    elif cmp >= target:
-                        action = "🎯 TARGET HIT: Sell 50%, Trail Rest"
-                    elif days_held > max_days:
-                        if curr_score >= 65 or curr_rvol >= 1.2:
-                            action = f"🔥 LATE BLOOMER (Held {days_held}d) - Momentum Detected"
-                        else:
-                            action = f"⏳ TIME STOP (Held {days_held}d) - Dead Money"
+                    # --- THE HIERARCHY OF PORTFOLIO ACTIONS ---
+                    if cmp <= trailing_sl:
+                        action = "🚨 SELL ALL (STOP HIT)"
+                    elif locked_target > 0 and cmp >= locked_target:
+                        action = "🎯 SCALE OUT 50%"
+                    elif locked_target > 0 and cmp >= (locked_target * 0.98):
+                        action = "👀 PREPARE TO SELL"
+                    elif momentum_exhausted and pnl_perc > 0:
+                        action = "⚠️ MOMENTUM EXHAUSTION (TIGHTEN STOP)"
+                    elif days_held > 14 and pnl_perc < 2.0:
+                        action = "🕰️ TIME CAPITULATION (DEAD MONEY)"
                     else:
                         action = "⏳ HOLD"
                     
                     port_calc.append({
-                        "Action": action, "Symbol": sym, "Health Status": health_status, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
-                        "P&L (%)": pnl_perc, "Profit/ Loss": cur_profit, "Target": target, "Trailing SL": trailing_sl,
+                        "🚨 ACTION": action, "Symbol": sym, "Qty": qty, "Avg Price": entry, "CMP": cmp, 
+                        "P&L (%)": pnl_perc, "Profit/ Loss": cur_profit, "Locked Target": locked_target, "Trailing SL": trailing_sl,
                         "Days Held": days_held, "Invested (₹)": invested, "Current (₹)": cur_val
                     })
                     
@@ -428,13 +435,21 @@ with tabs[2]:
                 c2.metric("📈 Current Value", f"₹{t_cur:,.0f}", f"₹{t_cur - t_inv:,.0f}")
                 c3.metric("🎯 Net P&L", f"{((t_cur - t_inv) / t_inv * 100) if t_inv > 0 else 0:.2f}%")
                 
+                def style_actions(val):
+                    v = str(val).upper()
+                    if 'SCALE OUT' in v: return 'color: #00FF88; font-weight: bold;'
+                    if 'SELL ALL' in v: return 'color: #FF4B4B; font-weight: bold;'
+                    if 'PREPARE' in v or 'MOMENTUM' in v: return 'color: #FFC107; font-weight: bold;'
+                    if 'CAPITULATION' in v: return 'color: #A0AEC0; font-weight: bold;'
+                    return ''
+                    
                 def style_pnl(val):
                     if pd.isna(val) or isinstance(val, str): return ''
                     return f"color: {'#00FF88' if val > 0 else '#FF4B4B' if val < 0 else 'white'}"
                     
                 st.dataframe(pdf.drop(columns=['Invested (₹)', 'Current (₹)']).style.format({
-                    "Avg Price": "{:.2f}", "CMP": "{:.2f}", "P&L (%)": "{:.1f}%", "Target": "{:.2f}", "Trailing SL": "{:.2f}", "Profit/ Loss": "{:.0f}"
-                }).map(style_pnl, subset=['P&L (%)']), use_container_width=True, hide_index=True)
+                    "Avg Price": "{:.2f}", "CMP": "{:.2f}", "P&L (%)": "{:.1f}%", "Locked Target": "{:.2f}", "Trailing SL": "{:.2f}", "Profit/ Loss": "{:.0f}"
+                }).map(style_pnl, subset=['P&L (%)']).map(style_actions, subset=['🚨 ACTION']), use_container_width=True, hide_index=True)
             else:
                 st.info(f"No active holdings in {owner}.")
 
@@ -491,9 +506,14 @@ with tabs[2]:
             if st.form_submit_button("Add to Portfolio"):
                 final_add_owner = new_owner.strip() if existing_owner == "➕ Create New Portfolio" else existing_owner
                 if final_add_owner and a_sym:
+                    # FETCH TARGET TO LOCK IT IN
+                    live_stock_data = df[df['SYMBOL'] == a_sym]
+                    locked_target = float(live_stock_data['TARGET'].iloc[0]) if not live_stock_data.empty else (a_price * 1.15)
+                    
                     supabase.table('portfolio').insert({
                         "symbol": a_sym, "entry_price": a_price, "qty": int(a_qty), 
-                        "date": str(datetime.date.today()), "owner": final_add_owner
+                        "date": str(datetime.date.today()), "owner": final_add_owner,
+                        "entry_target": locked_target  # <-- TARGET LOCKED
                     }).execute()
                     st.rerun()
                     
@@ -505,7 +525,7 @@ with tabs[2]:
         with st.form("sell_trade"):
             s_sym = st.selectbox("Stock to Sell", sell_holdings if sell_holdings else ["No Holdings"])
             s_price, s_qty = st.number_input("Sell Price", min_value=0.0, format="%.2f"), st.number_input("Qty to Sell", min_value=1, step=1)
-            s_reason = st.selectbox("Reason for Exit", ["Target Hit (Partial/Runner) 🎯", "Trailing SL Hit 🛡️", "Trend/EMA Broken 📉", "Time Expiration (Dead Money) ⏳", "Cut Losses Early ✂️", "Manual Exit"])
+            s_reason = st.selectbox("Reason for Exit", ["Target Hit (Partial/Runner) 🎯", "Trailing SL Hit 🛡️", "Momentum Exhaustion ⚠️", "Time Expiration (Dead Money) ⏳", "Cut Losses Early ✂️", "Manual Exit"])
             
             if st.form_submit_button("Execute Sale") and not port_df.empty and s_sym != "No Holdings":
                 holding = port_df[(port_df['symbol'] == s_sym) & (port_df['owner'] == sell_owner)].iloc[0]
